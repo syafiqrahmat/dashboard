@@ -207,6 +207,41 @@ def build_warranty_charts(df):
     return charts
 
 
+def recompute_overall_progress(df):
+    """Overall Progress Task (%) is meant to be each title's own project
+    completion (all its numbered subtasks averaged together), but the
+    value that comes in from the source spreadsheet is whatever number was
+    last typed in by hand -- e.g. an average taken before later subtasks
+    were even added to the sheet, or entirely missing. Recompute it fresh
+    here instead of trusting that stale figure.
+
+    A title's real subtasks are its rows numbered "1.", "2." etc in
+    Description; the "- " checklist bullets underneath a subtask (e.g. a
+    breakdown of "6. Pre UAT:") aren't separate subtasks and would double
+    count that one subtask's percentage if averaged in directly.
+    """
+    if df.empty or not {"Client", "Title", "Percentage"}.issubset(df.columns):
+        return df
+
+    df = df.copy()
+    pct = pd.to_numeric(df["Percentage"], errors="coerce")
+    is_subtask = (
+        df["Description"].astype(str).str.match(r"^\s*\d+\.")
+        if "Description" in df.columns else pd.Series(True, index=df.index)
+    )
+
+    def group_overall(idx):
+        group_pct = pct.loc[idx]
+        subtask_pct = group_pct[is_subtask.loc[idx]]
+        basis = subtask_pct if not subtask_pct.empty else group_pct
+        basis = basis.dropna()
+        return round(basis.mean(), 1) if not basis.empty else None
+
+    overall_by_group = df.groupby(["Client", "Title"]).apply(lambda g: group_overall(g.index), include_groups=False)
+    df["Overall Progress Task (%)"] = df.set_index(["Client", "Title"]).index.map(overall_by_group).to_numpy()
+    return df
+
+
 def build_project_charts(df):
     charts = {}
     if df.empty:
@@ -284,7 +319,26 @@ def build_project_charts(df):
         if c in detail.columns:
             detail[c] = detail[c].dt.strftime("%d/%m/%Y") if not detail[c].isna().all() else detail[c]
     detail = detail.fillna("")
-    charts["detail_data"] = detail.to_dict("records")
+    detail_records = detail.to_dict("records")
+
+    # Overall Progress Task (%) is one number per Title, not one per row --
+    # mark, for each contiguous run of rows sharing the same (Client,
+    # Title), how many rows the first one's cell should visually span, so
+    # the template can render it as a single merged cell (like the source
+    # spreadsheet) instead of repeating the same figure down every row.
+    if "Overall Progress Task (%)" in detail.columns and "Title" in detail.columns:
+        i, n = 0, len(detail_records)
+        while i < n:
+            key = (detail_records[i].get("Client"), detail_records[i].get("Title"))
+            j = i + 1
+            while j < n and (detail_records[j].get("Client"), detail_records[j].get("Title")) == key:
+                j += 1
+            detail_records[i]["_op_rowspan"] = j - i
+            for k in range(i + 1, j):
+                detail_records[k]["_op_rowspan"] = 0
+            i = j
+
+    charts["detail_data"] = detail_records
 
     return charts
 
@@ -791,6 +845,7 @@ def index():
     # that client.
     if filters["clients"] and "Client" in project_df.columns:
         project_df = project_df[project_df["Client"].isin(filters["clients"])]
+    project_df = recompute_overall_progress(project_df)
     has_project = not project_df.empty
 
     try:

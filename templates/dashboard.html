@@ -358,6 +358,12 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 .edit-mode td input.changed{background:#fff3cd;border-color:#f39c12}
 .editable-cell{cursor:pointer}
 .editable-cell:hover{background:#f0f7ff}
+.op-merged-cell{
+  text-align:center;font-weight:700;color:var(--accent);
+  background:rgba(44,95,130,0.1);border-left:3px solid var(--accent);border-right:3px solid var(--accent);
+}
+#project-table tr.title-group-start td{border-top:2px solid var(--accent)}
+#project-table tr.title-group-start td.op-merged-cell{border-top:3px solid var(--accent)}
 .save-toast{position:fixed;bottom:24px;right:24px;padding:12px 24px;border-radius:10px;font-weight:600;z-index:9999;display:none;animation:fadeIn 0.3s;max-width:420px}
 .save-toast.success{background:#2ecc71;color:#fff}
 .save-toast.error{background:#e74c3c;color:#fff}
@@ -819,7 +825,7 @@ body.role-admin .viewer-only-note{display:none}
         <thead>
           <tr>
             {% if project_charts.detail_data and project_charts.detail_data[0] is defined %}
-            {% set skip_cols_3 = ['_row_idx', '_source_file'] %}
+            {% set skip_cols_3 = ['_row_idx', '_source_file', '_op_rowspan'] %}
             {% for key in project_charts.detail_data[0].keys() %}
               {% if key not in skip_cols_3 %}
               <th>{{ key }}</th>
@@ -830,9 +836,13 @@ body.role-admin .viewer-only-note{display:none}
         </thead>
         <tbody>
           {% for row in project_charts.detail_data %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project">
+          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
             {% for key, val in row.items() %}
-              {% if key not in skip_cols_3 %}
+              {% if key == 'Overall Progress Task (%)' %}
+                {% if row.get('_op_rowspan', 1) > 0 %}
+                <td class="op-merged-cell" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+                {% endif %}
+              {% elif key not in skip_cols_3 %}
               <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
               {% endif %}
             {% endfor %}
