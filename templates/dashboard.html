@@ -74,7 +74,7 @@ body::after{
   opacity:0.02;mix-blend-mode:multiply;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
-.container{max-width:1440px;margin:0 auto;position:relative;z-index:1}
+.container{flex:1;min-width:0;position:relative;z-index:1}
 
 /* Lit-from-above edge on every glass panel, so panels read as raised
    surfaces instead of flat translucent rectangles. */
@@ -213,6 +213,69 @@ body::after{
 .tab-pane{display:none}
 .tab-pane.active{display:block;animation:fadeIn .25s ease}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+/* ---------- Client sidebar ---------- */
+.app-shell{display:flex;align-items:flex-start;max-width:1620px;margin:0 auto;position:relative}
+.client-sidebar{
+  width:230px;flex-shrink:0;position:sticky;top:24px;margin-right:20px;
+  background:var(--glass);border:1px solid var(--border);border-radius:var(--radius-lg);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  padding:16px 12px;max-height:calc(100vh - 48px);overflow-y:auto;
+  transition:width .2s ease,padding .2s ease,opacity .2s ease,margin .2s ease;
+}
+.client-sidebar.collapsed{
+  width:0;padding:0;margin-right:0;border:none;opacity:0;overflow:hidden;pointer-events:none;
+}
+.sidebar-collapse-btn{
+  position:absolute;top:12px;right:10px;background:transparent;border:none;
+  color:var(--text-faint);cursor:pointer;font-size:11px;padding:4px;line-height:1;
+}
+.sidebar-collapse-btn:hover{color:var(--text)}
+.sidebar-header{
+  font-family:'Sora',sans-serif;font-weight:700;font-size:0.78rem;color:var(--text);
+  text-transform:uppercase;letter-spacing:0.5px;margin:0 4px 10px;padding-right:20px;
+}
+.sidebar-list{display:flex;flex-direction:column;gap:2px}
+.sidebar-item{
+  display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:9px;color:var(--text-dim);
+  font-size:0.84rem;font-weight:600;text-decoration:none;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;transition:background .15s ease,color .15s ease;
+}
+.sidebar-item:hover{background:rgba(20,32,50,0.06);color:var(--text)}
+.sidebar-item.active{background:var(--gradient);color:#fff;box-shadow:0 4px 14px rgba(44,95,130,0.3)}
+.si-dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.55;flex-shrink:0}
+.sidebar-back{
+  display:inline-flex;align-items:center;gap:6px;color:var(--accent);font-weight:700;
+  font-size:0.78rem;text-decoration:none;margin:0 4px 10px;padding-right:20px;
+}
+.sidebar-back:hover{text-decoration:underline}
+.sidebar-client-name{
+  font-family:'Sora',sans-serif;font-weight:700;font-size:0.95rem;color:var(--text);
+  margin:0 4px 4px;padding-right:20px;word-break:break-word;
+}
+.sidebar-client-category{
+  display:inline-block;margin:0 4px 14px;padding:3px 10px;border-radius:999px;
+  background:rgba(44,95,130,0.12);color:var(--accent);font-size:0.7rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:0.4px;
+}
+
+/* ---------- Clickable Client cells (Overall Client tab table) ---------- */
+.client-link{
+  color:var(--accent);font-weight:700;text-decoration:none;cursor:pointer;
+}
+.client-link:hover{text-decoration:underline}
+.sidebar-expand-btn{
+  display:none;align-items:center;justify-content:center;
+  width:34px;height:34px;background:rgba(255,255,255,0.7);border:1px solid var(--border-strong);
+  border-radius:9px;cursor:pointer;color:var(--text-dim);font-size:15px;margin-right:12px;flex-shrink:0;
+}
+.sidebar-expand-btn:hover{color:var(--text);border-color:var(--accent)}
+.client-sidebar.collapsed ~ .container .sidebar-expand-btn{display:inline-flex}
+@media (max-width:900px){
+  .app-shell{flex-direction:column}
+  .client-sidebar{position:relative;top:0;width:100%;margin-right:0;margin-bottom:16px;max-height:none}
+  .client-sidebar.collapsed{display:none;width:auto;margin-bottom:0}
+}
 
 /* ---------- Metrics ---------- */
 .metrics{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:22px}
@@ -405,27 +468,142 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 .splash-bar{width:140px;height:3px;border-radius:3px;background:rgba(20,32,50,0.1);overflow:hidden}
 .splash-bar::after{content:"";display:block;width:40%;height:100%;background:var(--gradient);animation:splashBar 1.1s ease-in-out infinite}
 @keyframes splashBar{0%{transform:translateX(-250%)}100%{transform:translateX(350%)}}
+
+/* ---------- Role gate ---------- */
+.admin-only{display:none !important}
+body.role-admin .admin-only{display:inline-flex !important}
+.viewer-only-note{display:block;color:var(--text-dim);font-size:0.82rem;margin-top:10px}
+body.role-admin .viewer-only-note{display:none}
+.role-modal-overlay{
+  display:none;position:fixed;inset:0;z-index:10200;
+  align-items:center;justify-content:center;
+  background:rgba(15,23,35,0.4);
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+}
+.role-modal-overlay.open{display:flex}
+.role-modal-overlay.open ~ .app-shell{filter:blur(6px);pointer-events:none;user-select:none}
+.role-modal-cards{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;padding:20px;max-width:520px}
+.role-card{
+  width:220px;padding:28px 22px;border-radius:var(--radius-lg);
+  background:var(--glass-strong);border:1px solid var(--border-strong);
+  cursor:pointer;text-align:center;transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease;
+  box-shadow:0 16px 40px rgba(20,32,50,0.22);
+}
+.role-card:hover{transform:translateY(-4px);border-color:var(--accent);box-shadow:0 20px 50px rgba(44,95,130,0.3)}
+.role-card-icon{font-size:2.2rem;margin-bottom:10px}
+.role-card-title{font-family:'Sora',sans-serif;font-weight:700;font-size:1.05rem;color:var(--text);margin-bottom:6px}
+.role-card-desc{font-size:0.82rem;color:var(--text-dim);line-height:1.4}
+.role-login-box{
+  display:none;flex-direction:column;gap:14px;width:280px;padding:28px 24px;
+  border-radius:var(--radius-lg);background:var(--glass-strong);border:1px solid var(--border-strong);
+  box-shadow:0 16px 40px rgba(20,32,50,0.22);
+}
+.role-login-box.open{display:flex}
+.role-login-title{font-family:'Sora',sans-serif;font-weight:700;font-size:1.05rem;color:var(--text)}
+.role-login-box .control-group input{min-width:0;width:100%}
+.role-login-error{color:var(--danger);font-size:0.8rem;min-height:1em}
+.role-login-actions{display:flex;justify-content:flex-end;gap:10px}
 </style>
 </head>
-<body>
+<body class="{{ 'role-admin' if user_role == 'admin' else ('role-viewer' if user_role == 'viewer' else '') }}">
 <div class="splash-screen" id="splashScreen">
   <img src="/sw.svg" alt="Software Wizard" class="splash-logo">
   <div class="splash-text">Software Wizard <span>(M) Sdn Bhd</span></div>
   <div class="splash-bar"></div>
 </div>
+
+<div class="role-modal-overlay" id="roleModal">
+  <div class="role-modal-cards" id="roleModalChoice">
+    <div class="role-card" onclick="showAdminLogin()">
+      <div class="role-card-icon">&#128736;&#65039;</div>
+      <div class="role-card-title">Admin</div>
+      <div class="role-card-desc">Full access. Upload data, enable editing, and manage the database.</div>
+    </div>
+    <div class="role-card" onclick="loginViewer()">
+      <div class="role-card-icon">&#128065;&#65039;</div>
+      <div class="role-card-title">Viewer</div>
+      <div class="role-card-desc">Browse and filter the dashboard. No editing or uploads.</div>
+    </div>
+  </div>
+  <div class="role-login-box" id="roleLoginBox">
+    <div class="role-login-title">Admin Login</div>
+    <div class="control-group">
+      <label>Username</label>
+      <input type="text" id="roleUsername" autocomplete="username" placeholder="Username">
+    </div>
+    <div class="control-group">
+      <label>Password</label>
+      <input type="password" id="rolePassword" autocomplete="current-password" placeholder="Password">
+    </div>
+    <div class="role-login-error" id="roleLoginError"></div>
+    <div class="role-login-actions">
+      <button type="button" class="btn-ghost" onclick="backToRoleChoice()">Back</button>
+      <button type="button" class="btn-filter" onclick="loginAdmin()">Log In</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   var splash = document.getElementById('splashScreen');
   setTimeout(function(){
     splash.classList.add('splash-fade');
-    setTimeout(function(){ splash.style.display = 'none'; }, 550);
+    setTimeout(function(){
+      splash.style.display = 'none';
+      if (typeof maybeShowRoleModal === 'function') maybeShowRoleModal();
+    }, 550);
   }, 2500);
 })();
 </script>
+{% set single_client_mode = filter_options.selected_clients|length == 1 %}
+{% set client_category = filter_options.selected_task_types[0] if filter_options.selected_task_types|length == 1 else None %}
+<div class="app-shell">
+
+<aside class="client-sidebar" id="clientSidebar">
+  <button type="button" class="sidebar-collapse-btn" onclick="toggleSidebar()" title="Collapse sidebar">&#9664;</button>
+  {% if has_data %}
+    {% if single_client_mode %}
+    <a href="#" class="sidebar-back" onclick="selectClient(null); return false;">&larr; All Clients</a>
+    <div class="sidebar-client-name">{{ filter_options.selected_clients[0] }}</div>
+    {% if client_category %}
+    <div class="sidebar-client-category">{{ client_category }}</div>
+    {% endif %}
+    <nav class="sidebar-list">
+      {% if client_category == 'Development' %}
+      <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(3, this)">Project</button>
+      {% elif client_category == 'Warranty' %}
+      <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(2, this)">Warranty</button>
+      {% else %}
+      <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(7, this)">Ticket Details</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(4, this)">Ageing Analysis</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(5, this)">Ticket Analysis</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(8, this)">Ageing List</button>
+      {% endif %}
+    </nav>
+    {% else %}
+    <div class="sidebar-header">Sections</div>
+    <nav class="sidebar-list">
+      <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(9, this)">Overall Client</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(0, this)">Overview</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(1, this)">Maintenance</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(2, this)">Warranty</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(3, this)">Project</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(5, this)">Ticket Analysis</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(7, this)">Ticket Details</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(4, this)">Ageing Analysis</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(8, this)">Ageing List</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(6, this)">SLA Compliance</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(10, this)">Filters</button>
+    </nav>
+    {% endif %}
+  {% endif %}
+</aside>
+
 <div class="container">
 
 <div class="topbar">
   <div class="brand">
+    <button type="button" class="sidebar-expand-btn" id="sidebarExpandBtn" onclick="toggleSidebar()" title="Show clients">&#9776;</button>
     <div class="brand-mark">SW</div>
     <div class="brand-text">
       <div class="brand-name">Software Wizard <span>(M) Sdn Bhd</span></div>
@@ -439,9 +617,11 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
       <span class="fs-icon">&#9974;</span><span class="fs-label">Fullscreen</span>
     </button>
     <button type="button" class="btn-pill" onclick="refreshWithSplash()">&#10227; Refresh</button>
-    <button type="button" class="btn-pill primary" onclick="openUploadModal()">&#8593; Upload Data</button>
-    <button type="button" class="btn-pill danger" onclick="openRestartModal()">&#8635; Reset Database</button>
+    <button type="button" class="btn-pill primary admin-only" onclick="openUploadModal()">&#8593; Upload Data</button>
+    <button type="button" class="btn-pill danger admin-only" onclick="openRestartModal()">&#8635; Reset Database</button>
     <button type="button" class="btn-pill" id="installAppBtn" onclick="installApp()" style="display:none">&#8615; Install App</button>
+    <button type="button" class="btn-pill" id="roleSwitchBtn" onclick="openRoleModal()">&#9881;&#65039; <span id="roleSwitchLabel">Role</span></button>
+    <button type="button" class="btn-pill" onclick="logoutRole()">&#8630; Logout</button>
   </div>
 </div>
 
@@ -498,115 +678,6 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
   </div>
 </div>
 
-<form method="GET" action="/" class="controls" id="filters">
-  {% if filter_options.min_date %}
-  <div class="control-group">
-    <label>Start Date</label>
-    <input type="date" name="date_start" value="{{ filter_options.date_start }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
-  </div>
-  <div class="control-group">
-    <label>End Date</label>
-    <input type="date" name="date_end" value="{{ filter_options.date_end }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
-  </div>
-  {% endif %}
-  {% if filter_options.clients %}
-  <div class="control-group filter-dropdown" data-name="client">
-    <label>Client</label>
-    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-      <span class="dt-label">All Clients</span><span class="chev">&#9662;</span>
-    </button>
-    <div class="dropdown-panel">
-      <div class="dropdown-panel-head">
-        <span class="title">Client</span>
-        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-      </div>
-      <div class="options-scroll">
-        {% for c in filter_options.clients %}
-        <label class="dropdown-option">
-          <input type="checkbox" name="client" value="{{ c }}" {% if c in filter_options.selected_clients %}checked{% endif %}>
-          <span>{{ c }}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-  {% endif %}
-  {% if filter_options.priorities %}
-  <div class="control-group filter-dropdown" data-name="priority">
-    <label>Priority</label>
-    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-      <span class="dt-label">All Priorities</span><span class="chev">&#9662;</span>
-    </button>
-    <div class="dropdown-panel">
-      <div class="dropdown-panel-head">
-        <span class="title">Priority</span>
-        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-      </div>
-      <div class="options-scroll">
-        {% for p in filter_options.priorities %}
-        <label class="dropdown-option">
-          <input type="checkbox" name="priority" value="{{ p }}" {% if p in filter_options.selected_priorities %}checked{% endif %}>
-          <span>{{ p }}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-  {% endif %}
-  {% if filter_options.statuses %}
-  <div class="control-group filter-dropdown" data-name="status">
-    <label>Status</label>
-    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-      <span class="dt-label">All Statuses</span><span class="chev">&#9662;</span>
-    </button>
-    <div class="dropdown-panel">
-      <div class="dropdown-panel-head">
-        <span class="title">Status</span>
-        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-      </div>
-      <div class="options-scroll">
-        {% for s in filter_options.statuses %}
-        <label class="dropdown-option">
-          <input type="checkbox" name="status" value="{{ s }}" {% if s in filter_options.selected_statuses %}checked{% endif %}>
-          <span>{{ s }}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-  {% endif %}
-  {% if filter_options.task_types %}
-  <div class="control-group filter-dropdown" data-name="task_type">
-    <label>Task Type</label>
-    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-      <span class="dt-label">All Task Types</span><span class="chev">&#9662;</span>
-    </button>
-    <div class="dropdown-panel">
-      <div class="dropdown-panel-head">
-        <span class="title">Task Type</span>
-        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-      </div>
-      <div class="options-scroll">
-        {% for t in filter_options.task_types %}
-        <label class="dropdown-option">
-          <input type="checkbox" name="task_type" value="{{ t }}" {% if t in filter_options.selected_task_types %}checked{% endif %}>
-          <span>{{ t }}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-  {% endif %}
-  <div class="control-group">
-    <label>Search</label>
-    <input type="text" name="search" placeholder="Search tickets..." value="{{ filter_options.search }}">
-  </div>
-  <div class="control-group">
-    <button type="submit" class="btn-filter">Filter</button>
-  </div>
-</form>
-<div class="filter-backdrop" onclick="closeAllFilterDropdowns()"></div>
-
 {% if not has_data %}
 <div class="empty-state">
   <div class="icon">&#128202;</div>
@@ -619,27 +690,15 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
       file to populate the dashboard.
     {% endif %}
   </p>
-  <button type="button" class="btn-pill primary" onclick="openUploadModal()">&#8593; Upload Data</button>
+  <button type="button" class="btn-pill primary admin-only" onclick="openUploadModal()">&#8593; Upload Data</button>
+  <p class="viewer-only-note">Ask an admin to upload data.</p>
 </div>
 {% else %}
-
-<div class="tabs" id="tabs">
-  <button class="tab-btn active" onclick="switchTab(9, this)">Overall Client</button>
-  <button class="tab-btn" onclick="switchTab(0, this)">Overview</button>
-  <button class="tab-btn" onclick="switchTab(1, this)">Maintenance</button>
-  <button class="tab-btn" onclick="switchTab(2, this)">Warranty</button>
-  <button class="tab-btn" onclick="switchTab(3, this)">Project</button>
-  <button class="tab-btn" onclick="switchTab(5, this)">Ticket Analysis</button>
-  <button class="tab-btn" onclick="switchTab(7, this)">Ticket Details</button>
-  <button class="tab-btn" onclick="switchTab(4, this)">Ageing Analysis</button>
-  <button class="tab-btn" onclick="switchTab(8, this)">Ageing List</button>
-  <button class="tab-btn" onclick="switchTab(6, this)">SLA Compliance</button>
-   
-</div>
 
 <div class="tab-content">
 
 <div class="tab-pane" id="tab-0">
+  {% if overview_charts and overview_charts.metrics %}
   <div class="metrics">
     <div class="metric-card"><div class="val">{{ overview_charts.metrics.total }}</div><div class="lbl">Total Tickets</div></div>
     <div class="metric-card"><div class="val" style="color:var(--success)">{{ overview_charts.metrics.completed }}</div><div class="lbl">Completed <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.completed_pct }})</span></div></div>
@@ -655,6 +714,9 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
   </div>
   <hr>
   <div class="chart-full">{{ overview_charts.client_bar|safe }}</div>
+  {% else %}
+  <div class="alert alert-warning">No tickets match the current filters</div>
+  {% endif %}
 </div>
 
 <div class="tab-pane" id="tab-1">
@@ -666,7 +728,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
   <div class="chart-full"><h3>Status Details by Client</h3><div class="data-table-wrap">{{ comparison_charts.status_pivot|safe }}</div></div>
 </div>
 
-<div class="tab-pane" id="tab-2">
+<div class="tab-pane {{ 'active' if single_client_mode and client_category == 'Warranty' }}" id="tab-2">
   {% if warranty_charts and warranty_charts.metrics %}
   <div class="metrics">
     <div class="metric-card"><div class="val">{{ warranty_charts.metrics.total }}</div><div class="lbl">Total Warranty Tickets</div></div>
@@ -686,7 +748,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
       <span style="flex:1"></span>
       <button class="btn-save" id="saveBtn2" onclick="saveChanges2()" style="display:none">Save Changes</button>
       <button class="btn-cancel" id="cancelBtn2" onclick="cancelEdit2()" style="display:none">Cancel</button>
-      <button class="btn-edit" id="editBtn2" onclick="toggleEdit2()">Enable Editing</button>
+      <button class="btn-edit admin-only" id="editBtn2" onclick="toggleEdit2()">Enable Editing</button>
     </div>
     <div class="data-table-wrap" id="warranty-table-wrap">
       <table id="warranty-table">
@@ -717,11 +779,17 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
     </div>
   </div>
   {% else %}
-  <div class="alert alert-warning">No Warranty data found</div>
+  <div class="alert alert-warning">
+    {% if single_client_mode and client_category == 'Warranty' %}
+    No Warranty data found for {{ filter_options.selected_clients[0] }}
+    {% else %}
+    No Warranty data found
+    {% endif %}
+  </div>
   {% endif %}
 </div>
 
-<div class="tab-pane" id="tab-3">
+<div class="tab-pane {{ 'active' if single_client_mode and client_category == 'Development' }}" id="tab-3">
   {% if has_project and project_charts and project_charts.metrics %}
   <div class="metrics">
     <div class="metric-card"><div class="val">{{ project_charts.metrics.total }}</div><div class="lbl">Total Projects</div></div>
@@ -744,7 +812,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
       <span style="flex:1"></span>
       <button class="btn-save" id="saveBtn3" onclick="saveChanges3()" style="display:none">Save Changes</button>
       <button class="btn-cancel" id="cancelBtn3" onclick="cancelEdit3()" style="display:none">Cancel</button>
-      <button class="btn-edit" id="editBtn3" onclick="toggleEdit3()">Enable Editing</button>
+      <button class="btn-edit admin-only" id="editBtn3" onclick="toggleEdit3()">Enable Editing</button>
     </div>
     <div class="data-table-wrap" id="project-table-wrap">
       <table id="project-table">
@@ -775,7 +843,13 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
     </div>
   </div>
   {% else %}
-  <div class="alert alert-warning">No Project data found</div>
+  <div class="alert alert-warning">
+    {% if single_client_mode %}
+    No Project data found for {{ filter_options.selected_clients[0] }}
+    {% else %}
+    No Project data found
+    {% endif %}
+  </div>
   {% endif %}
 </div>
 
@@ -812,6 +886,9 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 </div>
 
 <div class="tab-pane" id="tab-5">
+  {% if not filtered_has_data %}
+  <div class="alert alert-warning">No tickets match the current filters</div>
+  {% else %}
   <div class="chart-row">
     <div class="chart-box">{{ timeline_charts.timeline_created|safe }}</div>
     <div class="chart-box">{{ timeline_charts.timeline_created_vs_completed|safe }}</div>
@@ -821,6 +898,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
   {% endif %}
   {% if timeline_charts.timeline_category %}
   <div class="chart-full"><h3>Trend by Category</h3>{{ timeline_charts.timeline_category|safe }}</div>
+  {% endif %}
   {% endif %}
 </div>
 
@@ -842,13 +920,13 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
   {% endif %}
 </div>
 
-<div class="tab-pane" id="tab-7">
+<div class="tab-pane {{ 'active' if single_client_mode and client_category not in ['Development', 'Warranty'] }}" id="tab-7">
   <div class="edit-bar">
     <span style="color:#667085;font-weight:600">Total records: {{ data_info.total_filtered }}</span>
     <span style="flex:1"></span>
     <button class="btn-save" id="saveBtn" onclick="saveChanges()" style="display:none">Save Changes</button>
     <button class="btn-cancel" id="cancelBtn" onclick="cancelEdit()" style="display:none">Cancel</button>
-    <button class="btn-edit" id="editBtn" onclick="toggleEdit()">Enable Editing</button>
+    <button class="btn-edit admin-only" id="editBtn" onclick="toggleEdit()">Enable Editing</button>
   </div>
   {% set skip_cols = ['_row_idx', 'Source File'] %}
   {% for client, rows in detail_by_client.items() %}
@@ -883,6 +961,14 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
       </div>
     </details>
   </div>
+  {% else %}
+  <div class="alert alert-warning">
+    {% if single_client_mode and filter_options.selected_task_types|length == 1 %}
+    No {{ filter_options.selected_task_types[0] }} tickets found for {{ filter_options.selected_clients[0] }}
+    {% else %}
+    No tickets match the current filters
+    {% endif %}
+  </div>
   {% endfor %}
 </div>
 
@@ -892,7 +978,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
     <span style="flex:1"></span>
     <button class="btn-save" id="saveBtn8" onclick="saveChanges8()" style="display:none">Save Changes</button>
     <button class="btn-cancel" id="cancelBtn8" onclick="cancelEdit8()" style="display:none">Cancel</button>
-    <button class="btn-edit" id="editBtn8" onclick="toggleEdit8()">Enable Editing</button>
+    <button class="btn-edit admin-only" id="editBtn8" onclick="toggleEdit8()">Enable Editing</button>
   </div>
   {% if ageing_list_data.total %}
   {% set skip_cols_8 = ['_row_idx', 'Source File'] %}
@@ -941,7 +1027,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 {% endif %}
 </div>
 
-<div class="tab-pane active" id="tab-9">
+<div class="tab-pane {{ 'active' if not single_client_mode }}" id="tab-9">
   {% if has_client and overall_client_charts and overall_client_charts.metrics %}
   <div class="metrics">
     <div class="metric-card"><div class="val">{{ overall_client_charts.metrics.total }}</div><div class="lbl">Total Projects</div></div>
@@ -972,7 +1058,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
       <span style="flex:1"></span>
       <button class="btn-save" id="saveBtn9" onclick="saveChanges9()" style="display:none">Save Changes</button>
       <button class="btn-cancel" id="cancelBtn9" onclick="cancelEdit9()" style="display:none">Cancel</button>
-      <button class="btn-edit" id="editBtn9" onclick="toggleEdit9()">Enable Editing</button>
+      <button class="btn-edit admin-only" id="editBtn9" onclick="toggleEdit9()">Enable Editing</button>
     </div>
     {% if overall_client_charts.status_sections %}
     {% for status, section in overall_client_charts.status_sections.items() %}
@@ -996,7 +1082,14 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
           <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="Client">
             {% for key, val in row.items() %}
               {% if key not in skip_cols_9 %}
-              <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+              {% set display_val = val if val is not none and val != 'None' and val != 'nan' else '' %}
+              {% if key == 'Client' and display_val %}
+              <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ status }}">
+                <span class="client-link">{{ display_val }}</span>
+              </td>
+              {% else %}
+              <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
+              {% endif %}
               {% endif %}
             {% endfor %}
           </tr>
@@ -1026,7 +1119,14 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
           <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="Client">
             {% for key, val in row.items() %}
               {% if key not in skip_cols_9 %}
-              <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+              {% set display_val = val if val is not none and val != 'None' and val != 'nan' else '' %}
+              {% if key == 'Client' and display_val %}
+              <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ row.get('Projek Status', '') }}">
+                <span class="client-link">{{ display_val }}</span>
+              </td>
+              {% else %}
+              <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
+              {% endif %}
               {% endif %}
             {% endfor %}
           </tr>
@@ -1041,7 +1141,102 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
   {% endif %}
 </div>
 
+<div class="tab-pane" id="tab-10">
+  <form method="GET" action="/" class="controls" id="filters">
+    {% if filter_options.min_date %}
+    <div class="control-group">
+      <label>Start Date</label>
+      <input type="date" name="date_start" value="{{ filter_options.date_start }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
+    </div>
+    <div class="control-group">
+      <label>End Date</label>
+      <input type="date" name="date_end" value="{{ filter_options.date_end }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
+    </div>
+    {% endif %}
+    {% for c in filter_options.selected_clients %}
+    <input type="hidden" name="client" value="{{ c }}">
+    {% endfor %}
+    {% if filter_options.priorities %}
+    <div class="control-group filter-dropdown" data-name="priority">
+      <label>Priority</label>
+      <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
+        <span class="dt-label">All Priorities</span><span class="chev">&#9662;</span>
+      </button>
+      <div class="dropdown-panel">
+        <div class="dropdown-panel-head">
+          <span class="title">Priority</span>
+          <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
+        </div>
+        <div class="options-scroll">
+          {% for p in filter_options.priorities %}
+          <label class="dropdown-option">
+            <input type="checkbox" name="priority" value="{{ p }}" {% if p in filter_options.selected_priorities %}checked{% endif %}>
+            <span>{{ p }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {% if filter_options.statuses %}
+    <div class="control-group filter-dropdown" data-name="status">
+      <label>Status</label>
+      <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
+        <span class="dt-label">All Statuses</span><span class="chev">&#9662;</span>
+      </button>
+      <div class="dropdown-panel">
+        <div class="dropdown-panel-head">
+          <span class="title">Status</span>
+          <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
+        </div>
+        <div class="options-scroll">
+          {% for s in filter_options.statuses %}
+          <label class="dropdown-option">
+            <input type="checkbox" name="status" value="{{ s }}" {% if s in filter_options.selected_statuses %}checked{% endif %}>
+            <span>{{ s }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {% if filter_options.task_types %}
+    <div class="control-group filter-dropdown" data-name="task_type">
+      <label>Task Type</label>
+      <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
+        <span class="dt-label">All Task Types</span><span class="chev">&#9662;</span>
+      </button>
+      <div class="dropdown-panel">
+        <div class="dropdown-panel-head">
+          <span class="title">Task Type</span>
+          <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
+        </div>
+        <div class="options-scroll">
+          {% for t in filter_options.task_types %}
+          <label class="dropdown-option">
+            <input type="checkbox" name="task_type" value="{{ t }}" {% if t in filter_options.selected_task_types %}checked{% endif %}>
+            <span>{{ t }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    <div class="control-group">
+      <label>Search</label>
+      <input type="text" name="search" placeholder="Search tickets..." value="{{ filter_options.search }}">
+    </div>
+    <div class="control-group">
+      <button type="submit" class="btn-filter">Filter</button>
+    </div>
+  </form>
+  <div class="filter-backdrop" onclick="closeAllFilterDropdowns()"></div>
+</div>
+
 {% endif %}
+</div>
+
+</div>
 </div>
 
 <script>
@@ -1147,6 +1342,126 @@ function refreshWithSplash() {
     }
   });
 })();
+
+/* ---------- Role gate (admin login vs viewer, backed by a real signed
+   server session, not a client cookie the browser could just edit) ---------- */
+var SW_USER_ROLE = {{ user_role|tojson }};
+
+function syncRoleLabel() {
+  var label = document.getElementById('roleSwitchLabel');
+  if (label) label.textContent = SW_USER_ROLE === 'admin' ? 'Admin' : (SW_USER_ROLE === 'viewer' ? 'Viewer' : 'Role');
+}
+function openRoleModal() {
+  backToRoleChoice();
+  document.getElementById('roleModal').classList.remove('mandatory');
+  document.getElementById('roleModal').classList.add('open');
+}
+function closeRoleModal() {
+  document.getElementById('roleModal').classList.remove('open');
+}
+function maybeShowRoleModal() {
+  if (SW_USER_ROLE === 'admin' || SW_USER_ROLE === 'viewer') return;
+  var modal = document.getElementById('roleModal');
+  backToRoleChoice();
+  modal.classList.add('mandatory');
+  modal.classList.add('open');
+}
+function showAdminLogin() {
+  document.getElementById('roleModalChoice').style.display = 'none';
+  document.getElementById('roleLoginBox').classList.add('open');
+  document.getElementById('roleLoginError').textContent = '';
+  document.getElementById('roleUsername').focus();
+}
+function backToRoleChoice() {
+  document.getElementById('roleModalChoice').style.display = 'flex';
+  document.getElementById('roleLoginBox').classList.remove('open');
+  document.getElementById('roleUsername').value = '';
+  document.getElementById('rolePassword').value = '';
+  document.getElementById('roleLoginError').textContent = '';
+}
+function loginAdmin() {
+  var username = document.getElementById('roleUsername').value;
+  var password = document.getElementById('rolePassword').value;
+  var errBox = document.getElementById('roleLoginError');
+  errBox.textContent = '';
+
+  fetch('/api/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username: username, password: password})
+  })
+  .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+  .then(function(result) {
+    if (result.ok && result.data.success) {
+      window.location.reload();
+    } else {
+      errBox.textContent = (result.data && result.data.error) || 'Login failed';
+    }
+  })
+  .catch(function(e) {
+    errBox.textContent = 'Login failed: ' + e.message;
+  });
+}
+function loginViewer() {
+  fetch('/api/login-viewer', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      if (result.success) window.location.reload();
+    });
+}
+function logoutRole() {
+  fetch('/api/logout', { method: 'POST' })
+    .then(function() { window.location.reload(); });
+}
+document.getElementById('roleUsername').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') loginAdmin();
+});
+document.getElementById('rolePassword').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') loginAdmin();
+});
+document.getElementById('roleModal').addEventListener('click', function(e) {
+  if (e.target === this && !this.classList.contains('mandatory')) closeRoleModal();
+});
+syncRoleLabel();
+
+/* ---------- Client sidebar ---------- */
+function toggleSidebar() {
+  var sb = document.getElementById('clientSidebar');
+  if (!sb) return;
+  sb.classList.toggle('collapsed');
+  try { localStorage.setItem('swSidebarCollapsed', sb.classList.contains('collapsed') ? '1' : '0'); } catch (e) {}
+}
+(function() {
+  var collapsed = false;
+  try { collapsed = localStorage.getItem('swSidebarCollapsed') === '1'; } catch (e) {}
+  if (!collapsed) return;
+  document.addEventListener('DOMContentLoaded', function() {
+    var sb = document.getElementById('clientSidebar');
+    if (sb) sb.classList.add('collapsed');
+  });
+})();
+function selectClient(name, category) {
+  // Entering (or leaving) a client's page always drops any leftover
+  // Priority/Status/Task Type/date/search filter from the Overall Client
+  // page -- except the category the client was clicked under (Development
+  // / Maintenance / Warranty), which is kept as a Task Type filter so a
+  // client with tickets in more than one category only shows the one that
+  // was clicked. If that client has no tickets in this exact category,
+  // the result is genuinely empty rather than silently falling back to
+  // showing every category mixed together.
+  var params = new URLSearchParams();
+  if (name) params.set('client', name);
+  if (category) params.set('task_type', category);
+  window.location.search = params.toString();
+}
+document.addEventListener('click', function(e) {
+  var cell = e.target.closest('.client-cell');
+  if (!cell) return;
+  var table = cell.closest('table');
+  if (table && table.classList.contains('edit-mode')) return;
+  e.preventDefault();
+  selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'));
+});
 
 function switchTab(idx, btn) {
   document.querySelectorAll('.tab-btn').forEach(function(b) {
