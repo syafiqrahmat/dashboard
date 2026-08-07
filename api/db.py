@@ -13,8 +13,16 @@ from contextlib import contextmanager
 import pandas as pd
 import psycopg2
 import psycopg2.extras
+from werkzeug.security import check_password_hash, generate_password_hash
 
 warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
+
+# Only used to seed the admin_users table the very first time it's empty --
+# after that, the password lives solely in the database (as a hash) and
+# this constant is never read again. Change the password afterwards via
+# set_admin_password(), not by editing this.
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "AdminSW123"
 
 TICKET_DB_COLUMNS = [
     ("Client", "client"),
@@ -170,6 +178,14 @@ CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(ticket_status);
 CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
 CREATE INDEX IF NOT EXISTS idx_tickets_task_type ON tickets(task_type);
 CREATE INDEX IF NOT EXISTS idx_tickets_created_date ON tickets(ticket_created_date);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -213,6 +229,46 @@ def init_schema(conn=None):
     with db_connection(conn) as c:
         with c.cursor() as cur:
             cur.execute(SCHEMA_SQL)
+            # Seed the one default admin account the first time this table
+            # is created (ON CONFLICT DO NOTHING makes this a no-op on
+            # every later startup, so an admin who changes the password
+            # afterward never gets silently reset back to the default).
+            cur.execute(
+                "INSERT INTO admin_users (username, password_hash) VALUES (%s, %s) "
+                "ON CONFLICT (username) DO NOTHING",
+                (DEFAULT_ADMIN_USERNAME, generate_password_hash(DEFAULT_ADMIN_PASSWORD)),
+            )
+
+
+def verify_admin_credentials(username, password, conn=None):
+    """Check a username/password against the admin_users table.
+
+    Case-sensitive on username (matches how it was stored), and safe
+    against timing-based username enumeration since check_password_hash
+    is always run -- against a dummy hash if the username doesn't exist --
+    rather than short-circuiting as soon as the lookup misses.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT password_hash FROM admin_users WHERE username = %s", (username,))
+            row = cur.fetchone()
+
+    dummy_hash = generate_password_hash("not-a-real-password")
+    stored_hash = row[0] if row else dummy_hash
+    ok = check_password_hash(stored_hash, password)
+    return ok and row is not None
+
+
+def set_admin_password(username, new_password, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "UPDATE admin_users SET password_hash = %s, updated_at = now() WHERE username = %s",
+                (generate_password_hash(new_password), username),
+            )
+            updated = cur.rowcount > 0
+        c.commit()
+    return updated
 
 
 def _records_for_insert(df, columns):
