@@ -14,7 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify, send_from_directory, g
+from flask import Flask, render_template, request, jsonify, send_from_directory, g, session
 
 load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env.local"), override=True)
@@ -33,6 +33,12 @@ app = Flask(
 
 MAX_UPLOAD_MB = 25
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+# Needed to sign the session cookie. A fixed fallback (rather than a
+# randomly generated one) matters here because Vercel's Python runtime can
+# spin up a fresh process per request, and a random secret would silently
+# invalidate every logged-in session on the next cold start.
+app.secret_key = os.environ.get("SECRET_KEY", "sw-dashboard-session-signing-key-change-me")
 
 PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -721,12 +727,22 @@ def build_sla_charts(df):
 
 @app.route("/")
 def index():
+    user_role = session.get("role")
     filters = parse_filters(request.args)
     try:
         df, load_errors = load_data(filters)
     except Exception as e:
         log(f"DB error loading tickets: {e}", "ERROR")
         df, load_errors = pd.DataFrame(), [str(e)]
+
+    # Warranty tickets are stored under a shared "Client Warranty" sentinel
+    # in the tickets table (not the real client name) -- the real client is
+    # only recorded in the Company column. So filtering tickets by the real
+    # client name (as every other category does) always returns zero rows
+    # for Warranty. Detect that case here and fetch a Warranty-appropriate
+    # dataframe instead, scoped by Company rather than Client.
+    client_category = filters["task_types"][0] if len(filters["task_types"]) == 1 else None
+    warranty_client = filters["clients"][0] if (len(filters["clients"]) == 1 and client_category == "Warranty") else None
 
     try:
         filter_options = db.get_filter_metadata(conn=request_conn())
@@ -741,11 +757,20 @@ def index():
     filter_options["selected_statuses"] = filters["statuses"]
     filter_options["selected_task_types"] = filters["task_types"]
 
-    has_data = not df.empty
     try:
         counts = db.get_counts(conn=request_conn())
     except Exception:
         counts = {"tickets": len(df), "projects": 0, "last_updated": None}
+
+    # has_data drives the page shell (sidebar + tabs vs. the "upload data"
+    # empty state) and must reflect whether the database has any tickets
+    # at all -- not whether the current client/task-type filter happens to
+    # match anything. Otherwise clicking into a client + category combo
+    # with zero matching tickets (e.g. a client with no "Development"
+    # tickets) would incorrectly collapse the whole dashboard back to the
+    # "no data yet" prompt instead of showing that pane empty.
+    has_data = counts.get("tickets", 0) > 0
+    filtered_has_data = not df.empty
 
     data_info = {
         "total_raw": counts.get("tickets", len(df)),
@@ -760,6 +785,12 @@ def index():
     except Exception as e:
         log(f"DB error loading projects: {e}", "ERROR")
         project_df = pd.DataFrame()
+    # The projects table is independent of the tickets table (no shared
+    # filter query), so a client selected via the sidebar/Overall Client
+    # table has to be applied here explicitly to scope the Project tab to
+    # that client.
+    if filters["clients"] and "Client" in project_df.columns:
+        project_df = project_df[project_df["Client"].isin(filters["clients"])]
     has_project = not project_df.empty
 
     try:
@@ -769,19 +800,44 @@ def index():
         client_df = pd.DataFrame()
     has_client = not client_df.empty
 
-    if has_data:
+    if filtered_has_data:
         overview_charts = build_charts(df)
         priority_charts = build_priority_charts(df)
         ageing_charts = build_ageing_charts(df)
         comparison_charts = build_client_comparison_charts(df)
         timeline_charts = build_timeline_charts(df)
         sla_charts = build_sla_charts(df)
-        warranty_charts = build_warranty_charts(df)
-        project_charts = build_project_charts(project_df)
     else:
-        overview_charts = priority_charts = ageing_charts = {}
+        overview_charts = priority_charts = {}
         comparison_charts = timeline_charts = sla_charts = {}
-        warranty_charts = project_charts = {}
+        # Matches the shape build_ageing_charts() always returns (even for
+        # a genuinely empty df) -- the template unconditionally iterates
+        # ageing_charts.ageing_clients.items(), so a bare {} here would
+        # raise UndefinedError instead of just rendering zero rows.
+        ageing_charts = {"age_order": ["1-30 Days", "31-60 Days", "> 60 Days"], "ageing_clients": {}}
+
+    # Warranty is scoped by Company, not the tickets-table Client filter
+    # (see the warranty_client comment above), so it's built independently
+    # of filtered_has_data just like the Project tab.
+    if warranty_client:
+        try:
+            warranty_df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
+        except Exception as e:
+            log(f"DB error loading warranty tickets: {e}", "ERROR")
+            warranty_df = pd.DataFrame()
+        if "Company" in warranty_df.columns:
+            warranty_df = warranty_df[warranty_df["Company"] == warranty_client]
+        warranty_charts = build_warranty_charts(warranty_df)
+    elif filtered_has_data:
+        warranty_charts = build_warranty_charts(df)
+    else:
+        warranty_charts = {}
+
+    # The Project tab is driven by project_df, not the tickets df, so it
+    # must not be blanked out just because the current ticket filter (e.g.
+    # a client viewed under their Development category, which has no
+    # matching Task Type on tickets) happens to match zero tickets.
+    project_charts = build_project_charts(project_df) if has_project else {}
 
     overall_client_charts = build_overall_client_charts(client_df) if has_client else {}
 
@@ -794,7 +850,7 @@ def index():
     avail_cols = [c for c in display_cols if c in df.columns]
     meta_cols = ["_row_idx", "Source File"]
     detail_cols = avail_cols + [c for c in meta_cols if c in df.columns]
-    detail_df = df[detail_cols].copy() if has_data and detail_cols else pd.DataFrame()
+    detail_df = df[detail_cols].copy() if filtered_has_data and detail_cols else pd.DataFrame()
 
     if "Ticket Created Date" in detail_df.columns:
         detail_df["Ticket Created Date"] = detail_df["Ticket Created Date"].dt.strftime("%d/%m/%Y")
@@ -803,14 +859,14 @@ def index():
     if "Ticket Closed Date" in detail_df.columns:
         detail_df["Ticket Closed Date"] = detail_df["Ticket Closed Date"].dt.strftime("%d/%m/%Y")
 
-    detail_data = detail_df.to_dict("records") if has_data and not detail_df.empty else []
+    detail_data = detail_df.to_dict("records") if filtered_has_data and not detail_df.empty else []
     detail_by_client = {}
     for row in detail_data:
         client = row.get("Client", "Unknown")
         detail_by_client.setdefault(client, []).append(row)
 
     ageing_list_data = {}
-    if has_data and "Ageing" in df.columns and df["Ageing"].notna().sum() > 0:
+    if filtered_has_data and "Ageing" in df.columns and df["Ageing"].notna().sum() > 0:
         age_order = ["1-30 Days", "31-60 Days", "> 60 Days"]
         ageing_cols = [c for c in ["Client", "Ticket No", "Ticket Title", "Ticket Status", "Priority", "Ticket Created Date", "Days", "_row_idx", "Source File"] if c in df.columns]
         ageing_df = df.dropna(subset=["Ageing"]).copy()
@@ -835,7 +891,9 @@ def index():
 
     return render_template(
         "dashboard.html",
+        user_role=user_role,
         has_data=has_data,
+        filtered_has_data=filtered_has_data,
         has_project=has_project,
         has_client=has_client,
         data_info=data_info,
@@ -856,8 +914,48 @@ def index():
     )
 
 
+def require_admin():
+    return session.get("role") == "admin"
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    ensure_schema()
+    data = request.get_json(silent=True) or request.form
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+
+    try:
+        valid = db.verify_admin_credentials(username, password, conn=request_conn())
+    except Exception as e:
+        log(f"DB error checking admin credentials: {e}", "ERROR")
+        return jsonify({"success": False, "error": "Login is temporarily unavailable"}), 503
+
+    if valid:
+        session["role"] = "admin"
+        session.permanent = True
+        return jsonify({"success": True, "role": "admin"})
+
+    return jsonify({"success": False, "error": "Incorrect username or password"}), 401
+
+
+@app.route("/api/login-viewer", methods=["POST"])
+def api_login_viewer():
+    session["role"] = "viewer"
+    session.permanent = True
+    return jsonify({"success": True, "role": "viewer"})
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    session.clear()
+    return jsonify({"success": True})
+
+
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
     ensure_schema()
 
     files = request.files.getlist("file")
@@ -998,6 +1096,8 @@ def api_upload():
 
 @app.route("/api/restart", methods=["POST"])
 def api_restart():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
     ensure_schema()
     try:
         db.reset_all(conn=request_conn())
@@ -1018,6 +1118,8 @@ def api_status():
 
 @app.route("/api/save", methods=["POST"])
 def api_save():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
     data = request.get_json()
     row_idx = data.get("row_idx")
     column = data.get("column")
