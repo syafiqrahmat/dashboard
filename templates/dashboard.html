@@ -1517,8 +1517,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
     if (editMode) {
       var cells = table.querySelectorAll('td.editable-cell');
       cells.forEach(function(cell) {
-        var val = cell.textContent.trim();
-        cell.innerHTML = '<input type="text" value="' + escapeHtml(val) + '" data-original="' + escapeHtml(val) + '">';
+        cell.innerHTML = buildEditableCellInput(cell);
         var inp = cell.querySelector('input');
         inp.addEventListener('input', function() {
           if (this.value !== this.getAttribute('data-original')) {
@@ -1531,8 +1530,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
     } else {
       var inputs = table.querySelectorAll('td.editable-cell input');
       inputs.forEach(function(inp) {
-        var td = inp.parentNode;
-        td.textContent = inp.value;
+        revertEditableCellToText(inp.parentNode, inp);
       });
     }
   }
@@ -1619,6 +1617,40 @@ function escapeHtml(text) {
   return String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/* ---------- Date-column editing (native calendar picker, saved in the
+   ISO yyyy-mm-dd format Postgres DATE columns expect -- typing a raw
+   dd/mm/yyyy string as free text was ambiguous for the database to parse
+   and could silently save the wrong date). ---------- */
+var DATE_COLUMNS = [
+  'Ticket Created Date', 'Ticket Completed Date', 'Ticket Closed Date',
+  'Start Date', 'End Date', 'Start date', 'Due date', 'Target Date',
+];
+function isDateColumn(col) {
+  return DATE_COLUMNS.indexOf(col) !== -1;
+}
+function ddmmyyyyToIso(text) {
+  var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((text || '').trim());
+  if (!m) return '';
+  return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+}
+function isoToDdmmyyyy(text) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((text || '').trim());
+  if (!m) return text || '';
+  return m[3] + '/' + m[2] + '/' + m[1];
+}
+function buildEditableCellInput(cell) {
+  var col = cell.getAttribute('data-col');
+  var val = cell.textContent.trim();
+  if (isDateColumn(col)) {
+    var iso = ddmmyyyyToIso(val);
+    return '<input type="date" value="' + iso + '" data-original="' + iso + '">';
+  }
+  return '<input type="text" value="' + escapeHtml(val) + '" data-original="' + escapeHtml(val) + '">';
+}
+function revertEditableCellToText(td, inp) {
+  td.textContent = inp.type === 'date' ? isoToDdmmyyyy(inp.value) : inp.value;
+}
+
 function showToast(msg, type) {
   var toast = document.getElementById('toast');
   if (!toast) {
@@ -1652,8 +1684,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
       t.classList.toggle('edit-mode', editMode);
       if (editMode) {
         t.querySelectorAll('td.editable-cell').forEach(function(cell) {
-          var val = cell.textContent.trim();
-          cell.innerHTML = '<input type="text" value="' + escapeHtml(val) + '" data-original="' + escapeHtml(val) + '">';
+          cell.innerHTML = buildEditableCellInput(cell);
           var inp = cell.querySelector('input');
           inp.addEventListener('input', function() {
             this.classList.toggle('changed', this.value !== this.getAttribute('data-original'));
@@ -1661,7 +1692,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
         });
       } else {
         t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
-          inp.parentNode.textContent = inp.value;
+          revertEditableCellToText(inp.parentNode, inp);
         });
       }
     });
@@ -1771,8 +1802,7 @@ function toggleEdit8() {
     t.classList.toggle('edit-mode', !editMode);
     if (!editMode) {
       t.querySelectorAll('td.editable-cell').forEach(function(cell) {
-        var val = cell.textContent.trim();
-        cell.innerHTML = '<input type="text" value="' + escapeHtml(val) + '" data-original="' + escapeHtml(val) + '">';
+        cell.innerHTML = buildEditableCellInput(cell);
         var inp = cell.querySelector('input');
         inp.addEventListener('input', function() {
           if (this.value !== this.getAttribute('data-original')) {
@@ -1784,8 +1814,7 @@ function toggleEdit8() {
       });
     } else {
       t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
-        var td = inp.parentNode;
-        td.textContent = inp.value;
+        revertEditableCellToText(inp.parentNode, inp);
       });
     }
   });
