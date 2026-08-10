@@ -264,6 +264,10 @@ body::after{
   color:var(--accent);font-weight:700;text-decoration:none;cursor:pointer;
 }
 .client-link:hover{text-decoration:underline}
+.client-table:not(.edit-mode) tbody tr,
+#client-table:not(.edit-mode) tbody tr{cursor:pointer}
+.client-table:not(.edit-mode) tbody tr:hover,
+#client-table:not(.edit-mode) tbody tr:hover{background:rgba(44,95,130,0.06)}
 .sidebar-expand-btn{
   display:none;align-items:center;justify-content:center;
   width:34px;height:34px;background:rgba(255,255,255,0.7);border:1px solid var(--border-strong);
@@ -1465,9 +1469,11 @@ function selectClient(name, category) {
   window.location.search = params.toString();
 }
 document.addEventListener('click', function(e) {
-  var cell = e.target.closest('.client-cell');
+  var row = e.target.closest('tr');
+  if (!row) return;
+  var cell = row.querySelector('.client-cell');
   if (!cell) return;
-  var table = cell.closest('table');
+  var table = row.closest('table');
   if (table && table.classList.contains('edit-mode')) return;
   e.preventDefault();
   selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'));
