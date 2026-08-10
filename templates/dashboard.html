@@ -264,6 +264,22 @@ body::after{
   color:var(--accent);font-weight:700;text-decoration:none;cursor:pointer;
 }
 .client-link:hover{text-decoration:underline}
+
+/* ---------- End Date corner banner (Overall Client tab) ---------- */
+.end-date-cell{position:relative}
+.end-date-badge{
+  position:absolute;top:2px;right:2px;padding:1px 6px;border-radius:4px;
+  font-size:0.62rem;font-weight:800;letter-spacing:0.3px;text-transform:uppercase;
+  line-height:1.5;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,0.25);
+  animation:endDateBadgeIn 0.35s ease-out;
+}
+.end-date-badge.due-soon{background:#f5c518;color:#5c4600}
+.end-date-badge.overdue{background:#e0392c;color:#fff}
+.derived-cell{color:var(--text-dim);background:rgba(0,0,0,0.03);cursor:not-allowed}
+@keyframes endDateBadgeIn{
+  0%{opacity:0;transform:translateY(-4px) scale(0.85)}
+  100%{opacity:1;transform:translateY(0) scale(1)}
+}
 .client-table:not(.edit-mode) tbody tr,
 #client-table:not(.edit-mode) tbody tr{cursor:pointer}
 .client-table:not(.edit-mode) tbody tr:hover,
@@ -839,13 +855,17 @@ body.role-admin .viewer-only-note{display:none}
           </tr>
         </thead>
         <tbody>
+          {% set ns_op = namespace(group=0) %}
           {% for row in project_charts.detail_data %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
+            {% if row.get('_op_rowspan', 1) > 0 %}{% set ns_op.group = ns_op.group + 1 %}{% endif %}
+          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" data-op-group="{{ ns_op.group }}" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
             {% for key, val in row.items() %}
               {% if key == 'Overall Progress Task (%)' %}
                 {% if row.get('_op_rowspan', 1) > 0 %}
-                <td class="op-merged-cell" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+                <td class="op-merged-cell" id="op-cell-{{ ns_op.group }}" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
                 {% endif %}
+              {% elif key in ('Progress', 'Status Progress') %}
+              <td class="derived-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
               {% elif key not in skip_cols_3 %}
               <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
               {% endif %}
@@ -1101,6 +1121,8 @@ body.role-admin .viewer-only-note{display:none}
               <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ status }}">
                 <span class="client-link">{{ display_val }}</span>
               </td>
+              {% elif key == 'End Date' and display_val %}
+              <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
               {% else %}
               <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
               {% endif %}
@@ -1138,6 +1160,8 @@ body.role-admin .viewer-only-note{display:none}
               <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ row.get('Projek Status', '') }}">
                 <span class="client-link">{{ display_val }}</span>
               </td>
+              {% elif key == 'End Date' and display_val %}
+              <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
               {% else %}
               <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
               {% endif %}
@@ -1454,6 +1478,41 @@ function toggleSidebar() {
     if (sb) sb.classList.add('collapsed');
   });
 })();
+/* ---------- End Date corner banner (Overall Client tab) ----------
+   Flags rows whose End Date is within the next 7 days (yellow "Due Soon")
+   or already in the past (red "Overdue"). Runs after render since the
+   dates are baked into the table as plain dd/mm/yyyy text server-side. */
+function applyEndDateBadges() {
+  var cells = document.querySelectorAll('.end-date-cell');
+  if (!cells.length) return;
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  var SOON_DAYS = 7;
+  cells.forEach(function(cell) {
+    var existing = cell.querySelector('.end-date-badge');
+    if (existing) existing.remove();
+    if (cell.querySelector('input')) return;
+    var text = cell.textContent.trim();
+    var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
+    if (!m) return;
+    var due = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+    if (isNaN(due.getTime())) return;
+    var diffDays = Math.round((due - today) / 86400000);
+    var badge = document.createElement('span');
+    if (diffDays < 0) {
+      badge.className = 'end-date-badge overdue';
+      badge.textContent = 'Expired';
+    } else if (diffDays <= SOON_DAYS) {
+      badge.className = 'end-date-badge due-soon';
+      badge.textContent = 'Due Soon';
+    } else {
+      return;
+    }
+    cell.appendChild(badge);
+  });
+}
+document.addEventListener('DOMContentLoaded', applyEndDateBadges);
+
 function selectClient(name, category) {
   // Entering (or leaving) a client's page always drops any leftover
   // Priority/Status/Task Type/date/search filter from the Overall Client
@@ -1651,10 +1710,69 @@ function buildEditableCellInput(cell) {
     var iso = ddmmyyyyToIso(val);
     return '<input type="date" value="' + iso + '" data-original="' + iso + '">';
   }
+  if (col === 'Percentage') {
+    var n = parseFloat(val);
+    var norm = isNaN(n) ? '' : clampPercentage(n).toFixed(2);
+    return '<input type="number" min="0" max="100" step="0.01" value="' + norm + '" data-original="' + norm + '">';
+  }
   return '<input type="text" value="' + escapeHtml(val) + '" data-original="' + escapeHtml(val) + '">';
 }
 function revertEditableCellToText(td, inp) {
   td.textContent = inp.type === 'date' ? isoToDdmmyyyy(inp.value) : inp.value;
+}
+
+/* ---------- Percentage -> Status Progress / Overall Progress live sync
+   (Project Details editing) -----------------------------------------
+   Editing a task's Percentage immediately (a) clamps it to 0-100 with
+   2 decimal places, (b) derives Status Progress from it (0 = Not Started,
+   1-99 = In Progress, 100 = Completed -- matching the substring match
+   build_project_charts() uses to count statuses), and (c) recomputes the
+   Title group's Overall Progress Task (%) merged cell so the average is
+   visible before saving, not just after a reload. */
+function clampPercentage(n) {
+  return Math.min(100, Math.max(0, n));
+}
+function statusForPercentage(n) {
+  if (n <= 0) return 'Not Started';
+  if (n >= 100) return 'Completed';
+  return 'In Progress';
+}
+function syncPercentageInput(inp) {
+  var n = parseFloat(inp.value);
+  if (isNaN(n)) return;
+  n = clampPercentage(n);
+  inp.value = n.toFixed(2);
+  var tr = inp.closest('tr');
+  if (!tr) return;
+  var statusCell = tr.querySelector('td[data-col="Status Progress"]');
+  if (statusCell) statusCell.textContent = statusForPercentage(n);
+  var progressCell = tr.querySelector('td[data-col="Progress"]');
+  if (progressCell) progressCell.textContent = n.toFixed(2);
+  recomputeOverallProgress(tr);
+}
+function recomputeOverallProgress(tr) {
+  var groupId = tr.getAttribute('data-op-group');
+  var table = tr.closest('table');
+  if (!groupId || !table) return;
+  var vals = [], subtaskVals = [];
+  table.querySelectorAll('tr[data-op-group="' + groupId + '"]').forEach(function(r) {
+    var pc = r.querySelector('td.editable-cell[data-col="Percentage"]');
+    if (!pc) return;
+    var inp = pc.querySelector('input');
+    var raw = inp ? inp.value : pc.textContent.trim();
+    var n = parseFloat(raw);
+    if (isNaN(n)) return;
+    vals.push(n);
+    var descCell = r.querySelector('td.editable-cell[data-col="Description"]');
+    var descInp = descCell ? descCell.querySelector('input') : null;
+    var descText = descCell ? (descInp ? descInp.value : descCell.textContent) : '';
+    if (/^\s*\d+\./.test(descText || '')) subtaskVals.push(n);
+  });
+  var basis = subtaskVals.length ? subtaskVals : vals;
+  if (!basis.length) return;
+  var avg = basis.reduce(function(a, b) { return a + b; }, 0) / basis.length;
+  var opCell = document.getElementById('op-cell-' + groupId);
+  if (opCell) opCell.textContent = avg.toFixed(1);
 }
 
 function showToast(msg, type) {
@@ -1689,12 +1807,17 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
     getTables().forEach(function(t) {
       t.classList.toggle('edit-mode', editMode);
       if (editMode) {
+        t.querySelectorAll('.end-date-badge').forEach(function(b) { b.remove(); });
         t.querySelectorAll('td.editable-cell').forEach(function(cell) {
           cell.innerHTML = buildEditableCellInput(cell);
           var inp = cell.querySelector('input');
           inp.addEventListener('input', function() {
             this.classList.toggle('changed', this.value !== this.getAttribute('data-original'));
           });
+          if (cell.getAttribute('data-col') === 'Percentage') {
+            inp.addEventListener('change', function() { syncPercentageInput(this); });
+            inp.addEventListener('blur', function() { syncPercentageInput(this); });
+          }
         });
       } else {
         t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
@@ -1702,6 +1825,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
         });
       }
     });
+    if (!editMode) applyEndDateBadges();
   }
 
   function save() {
@@ -1718,6 +1842,19 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
             column: td.getAttribute('data-col'),
             value: inp.value
           });
+          if (td.getAttribute('data-col') === 'Percentage') {
+            ['Progress', 'Status Progress'].forEach(function(derivedCol) {
+              var derivedCell = tr.querySelector('td[data-col="' + derivedCol + '"]');
+              if (!derivedCell) return;
+              pending.push({
+                source_file: tr.getAttribute('data-source'),
+                sheet: tr.getAttribute('data-sheet'),
+                row_idx: tr.getAttribute('data-row-idx'),
+                column: derivedCol,
+                value: derivedCell.textContent.trim()
+              });
+            });
+          }
         }
       });
     });
