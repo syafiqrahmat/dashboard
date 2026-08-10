@@ -1,0 +1,89 @@
+<form method="GET" action="/" class="controls" id="filters">
+  {% if filter_options.min_date %}
+  <div class="control-group">
+    <label>Start Date</label>
+    <input type="date" name="date_start" value="{{ filter_options.date_start }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
+  </div>
+  <div class="control-group">
+    <label>End Date</label>
+    <input type="date" name="date_end" value="{{ filter_options.date_end }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
+  </div>
+  {% endif %}
+  {% for c in filter_options.selected_clients %}
+  <input type="hidden" name="client" value="{{ c }}">
+  {% endfor %}
+  {% if filter_options.priorities %}
+  <div class="control-group filter-dropdown" data-name="priority">
+    <label>Priority</label>
+    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
+      <span class="dt-label">All Priorities</span><span class="chev">&#9662;</span>
+    </button>
+    <div class="dropdown-panel">
+      <div class="dropdown-panel-head">
+        <span class="title">Priority</span>
+        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
+      </div>
+      <div class="options-scroll">
+        {% for p in filter_options.priorities %}
+        <label class="dropdown-option">
+          <input type="checkbox" name="priority" value="{{ p }}" {% if p in filter_options.selected_priorities %}checked{% endif %}>
+          <span>{{ p }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% if filter_options.statuses %}
+  <div class="control-group filter-dropdown" data-name="status">
+    <label>Status</label>
+    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
+      <span class="dt-label">All Statuses</span><span class="chev">&#9662;</span>
+    </button>
+    <div class="dropdown-panel">
+      <div class="dropdown-panel-head">
+        <span class="title">Status</span>
+        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
+      </div>
+      <div class="options-scroll">
+        {% for s in filter_options.statuses %}
+        <label class="dropdown-option">
+          <input type="checkbox" name="status" value="{{ s }}" {% if s in filter_options.selected_statuses %}checked{% endif %}>
+          <span>{{ s }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% if filter_options.task_types %}
+  <div class="control-group filter-dropdown" data-name="task_type">
+    <label>Task Type</label>
+    <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
+      <span class="dt-label">All Task Types</span><span class="chev">&#9662;</span>
+    </button>
+    <div class="dropdown-panel">
+      <div class="dropdown-panel-head">
+        <span class="title">Task Type</span>
+        <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
+      </div>
+      <div class="options-scroll">
+        {% for t in filter_options.task_types %}
+        <label class="dropdown-option">
+          <input type="checkbox" name="task_type" value="{{ t }}" {% if t in filter_options.selected_task_types %}checked{% endif %}>
+          <span>{{ t }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  <div class="control-group">
+    <label>Search</label>
+    <input type="text" name="search" placeholder="Search tickets..." value="{{ filter_options.search }}">
+  </div>
+  <div class="control-group">
+    <button type="submit" class="btn-filter">Filter</button>
+  </div>
+</form>
+<div class="filter-backdrop" onclick="closeAllFilterDropdowns()"></div>

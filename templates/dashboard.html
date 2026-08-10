@@ -276,6 +276,7 @@ body::after{
 .end-date-badge.due-soon{background:#f5c518;color:#5c4600}
 .end-date-badge.overdue{background:#e0392c;color:#fff}
 .derived-cell{color:var(--text-dim);background:rgba(0,0,0,0.03);cursor:not-allowed}
+.tab-loading{padding:60px 20px;text-align:center;color:var(--text-dim);font-size:0.95rem}
 @keyframes endDateBadgeIn{
   0%{opacity:0;transform:translateY(-4px) scale(0.85)}
   100%{opacity:1;transform:translateY(0) scale(1)}
@@ -578,7 +579,7 @@ body.role-admin .viewer-only-note{display:none}
       splash.style.display = 'none';
       if (typeof maybeShowRoleModal === 'function') maybeShowRoleModal();
     }, 550);
-  }, 2500);
+  }, 300);
 })();
 </script>
 {% set single_client_mode = filter_options.selected_clients|length == 1 %}
@@ -723,552 +724,48 @@ body.role-admin .viewer-only-note{display:none}
 
 <div class="tab-content">
 
-<div class="tab-pane" id="tab-0">
-  {% if overview_charts and overview_charts.metrics %}
-  <div class="metrics">
-    <div class="metric-card"><div class="val">{{ overview_charts.metrics.total }}</div><div class="lbl">Total Tickets</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--success)">{{ overview_charts.metrics.completed }}</div><div class="lbl">Completed <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.completed_pct }})</span></div></div>
-    <div class="metric-card"><div class="val" style="color:var(--warning)">{{ overview_charts.metrics.pending }}</div><div class="lbl">Pending <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.pending_pct }})</span></div></div>
-    <div class="metric-card"><div class="val" style="color:var(--danger)">{{ overview_charts.metrics.in_progress }}</div><div class="lbl">In Progress <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.in_progress_pct }})</span></div></div>
-    <div class="metric-card"><div class="val" style="color:var(--danger)">{{ overview_charts.metrics.sla_breach }}</div><div class="lbl">SLA Breaches</div></div>
-    <div class="metric-card"><div class="val">{{ overview_charts.metrics.avg_days if overview_charts.metrics.avg_days else "N/A" }}</div><div class="lbl">Avg Days to Complete</div></div>
-  </div>
-  <hr>
-  <div class="chart-row">
-    <div class="chart-box">{{ overview_charts.status_pie|safe }}</div>
-    <div class="chart-box">{{ overview_charts.priority_pie|safe }}</div>
-  </div>
-  <hr>
-  <div class="chart-full">{{ overview_charts.client_bar|safe }}</div>
-  {% else %}
-  <div class="alert alert-warning">No tickets match the current filters</div>
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 0 else '' }}" id="tab-0" data-loaded="{{ 'true' if default_tab_idx == 0 else 'false' }}">
+  {% if default_tab_idx == 0 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane" id="tab-1">
-  <div class="chart-full"><h3>Count by Status</h3>{{ comparison_charts.count_by_status|safe }}</div>
-  <div class="chart-row">
-    <div class="chart-box">{{ comparison_charts.client_total_bar|safe }}</div>
-  </div>
-  <div class="chart-full"><h3>Status by Client</h3>{{ comparison_charts.status_by_client|safe }}</div>
-  <div class="chart-full"><h3>Status Details by Client</h3><div class="data-table-wrap">{{ comparison_charts.status_pivot|safe }}</div></div>
+<div class="tab-pane{{ ' active' if default_tab_idx == 1 else '' }}" id="tab-1" data-loaded="{{ 'true' if default_tab_idx == 1 else 'false' }}">
+  {% if default_tab_idx == 1 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane {{ 'active' if single_client_mode and client_category == 'Warranty' }}" id="tab-2">
-  {% if warranty_charts and warranty_charts.metrics %}
-  <div class="metrics">
-    <div class="metric-card"><div class="val">{{ warranty_charts.metrics.total }}</div><div class="lbl">Total Warranty Tickets</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--success)">{{ warranty_charts.metrics.completed }}</div><div class="lbl">Completed</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--warning)">{{ warranty_charts.metrics.pending }}</div><div class="lbl">Pending</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--danger)">{{ warranty_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--danger)">{{ warranty_charts.metrics.sla_breach }}</div><div class="lbl">SLA Breaches</div></div>
-  </div>
-  <div class="chart-row">
-    <div class="chart-box">{{ warranty_charts.status_pie|safe }}</div>
-    <div class="chart-box">{{ warranty_charts.task_type_bar|safe }}</div>
-  </div>
-  <div class="chart-full">{{ warranty_charts.project_bar|safe }}</div>
-  <div class="chart-full">
-    <h3>Warranty Ticket Details</h3>
-    <div class="edit-bar" style="margin-bottom:4px">
-      <span style="flex:1"></span>
-      <button class="btn-save" id="saveBtn2" onclick="saveChanges2()" style="display:none">Save Changes</button>
-      <button class="btn-cancel" id="cancelBtn2" onclick="cancelEdit2()" style="display:none">Cancel</button>
-      <button class="btn-edit admin-only" id="editBtn2" onclick="toggleEdit2()">Enable Editing</button>
-    </div>
-    <div class="data-table-wrap" id="warranty-table-wrap">
-      <table id="warranty-table">
-        <thead>
-          <tr>
-            {% if warranty_charts.detail_data and warranty_charts.detail_data[0] is defined %}
-            {% set skip_cols_2 = ['_row_idx', 'Source File'] %}
-            {% for key in warranty_charts.detail_data[0].keys() %}
-              {% if key not in skip_cols_2 %}
-              <th>{{ key }}</th>
-              {% endif %}
-            {% endfor %}
-            {% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in warranty_charts.detail_data %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="Client Warranty">
-            {% for key, val in row.items() %}
-              {% if key not in skip_cols_2 %}
-              <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-              {% endif %}
-            {% endfor %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% else %}
-  <div class="alert alert-warning">
-    {% if single_client_mode and client_category == 'Warranty' %}
-    No Warranty data found for {{ filter_options.selected_clients[0] }}
-    {% else %}
-    No Warranty data found
-    {% endif %}
-  </div>
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 2 else '' }}" id="tab-2" data-loaded="{{ 'true' if default_tab_idx == 2 else 'false' }}">
+  {% if default_tab_idx == 2 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane {{ 'active' if single_client_mode and client_category == 'Development' }}" id="tab-3">
-  {% if has_project and project_charts and project_charts.metrics %}
-  <div class="metrics">
-    <div class="metric-card"><div class="val">{{ project_charts.metrics.total }}</div><div class="lbl">Total Projects</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--success)">{{ project_charts.metrics.completed }}</div><div class="lbl">Completed</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--info)">{{ project_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--neutral)">{{ project_charts.metrics.not_started }}</div><div class="lbl">Not Started</div></div>
-  </div>
-  <div class="chart-row">
-    <div class="chart-box">{{ project_charts.client_bar|safe }}</div>
-    <div class="chart-box">{{ project_charts.status_pie|safe }}</div>
-  </div>
-  {% if project_charts.timeline_chart %}
-  <div class="chart-full"><h3>PROJECT DEVELOPMENT TIMELINE</h3>{{ project_charts.timeline_chart|safe }}</div>
-  {% else %}
-  <div class="alert alert-warning">No timeline data</div>
-  {% endif %}
-  <div class="chart-full">
-    <h3>Project Details</h3>
-    <div class="edit-bar" style="margin-bottom:4px">
-      <span style="flex:1"></span>
-      <button class="btn-save" id="saveBtn3" onclick="saveChanges3()" style="display:none">Save Changes</button>
-      <button class="btn-cancel" id="cancelBtn3" onclick="cancelEdit3()" style="display:none">Cancel</button>
-      <button class="btn-edit admin-only" id="editBtn3" onclick="toggleEdit3()">Enable Editing</button>
-    </div>
-    <div class="data-table-wrap" id="project-table-wrap">
-      <table id="project-table">
-        <thead>
-          <tr>
-            {% if project_charts.detail_data and project_charts.detail_data[0] is defined %}
-            {% set skip_cols_3 = ['_row_idx', '_source_file', '_op_rowspan'] %}
-            {% for key in project_charts.detail_data[0].keys() %}
-              {% if key not in skip_cols_3 %}
-              <th>{{ key }}</th>
-              {% endif %}
-            {% endfor %}
-            {% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% set ns_op = namespace(group=0) %}
-          {% for row in project_charts.detail_data %}
-            {% if row.get('_op_rowspan', 1) > 0 %}{% set ns_op.group = ns_op.group + 1 %}{% endif %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" data-op-group="{{ ns_op.group }}" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
-            {% for key, val in row.items() %}
-              {% if key == 'Overall Progress Task (%)' %}
-                {% if row.get('_op_rowspan', 1) > 0 %}
-                <td class="op-merged-cell" id="op-cell-{{ ns_op.group }}" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-                {% endif %}
-              {% elif key in ('Progress', 'Status Progress') %}
-              <td class="derived-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-              {% elif key not in skip_cols_3 %}
-              <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-              {% endif %}
-            {% endfor %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  {% else %}
-  <div class="alert alert-warning">
-    {% if single_client_mode %}
-    No Project data found for {{ filter_options.selected_clients[0] }}
-    {% else %}
-    No Project data found
-    {% endif %}
-  </div>
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 3 else '' }}" id="tab-3" data-loaded="{{ 'true' if default_tab_idx == 3 else 'false' }}">
+  {% if default_tab_idx == 3 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane" id="tab-4">
-  {% if ageing_charts.total_ageing is defined %}
-  <div class="metrics"><div class="metric-card"><div class="val">{{ ageing_charts.total_ageing }}</div><div class="lbl">Total Ageing Records</div></div></div>
-  {% endif %}
-  {% for client, data in ageing_charts.ageing_clients.items() %}
-  <div class="client-section">
-    <h4>{{ client }} ({{ data.count }} records)</h4>
-    <div class="chart-row">
-      <div class="chart-box" style="flex:0.4;min-width:200px">
-        <table>
-          <tr><th>Age Group</th><th>Count</th></tr>
-          {% for age in ageing_charts.age_order %}
-          <tr><td>{{ age }}</td><td>{{ data.table[age] }}</td></tr>
-          {% endfor %}
-        </table>
-      </div>
-      <div class="chart-box" style="flex:1">{{ data.chart|safe }}</div>
-    </div>
-  </div>
-  {% endfor %}
-  {% if ageing_charts.days_hist %}
-  <hr>
-  <div class="chart-full"><h3>Days Open Distribution</h3>{{ ageing_charts.days_hist|safe }}</div>
-  {% endif %}
-  {% if ageing_charts.sla_breach_bar %}
-  <div class="chart-full"><h3>SLA Breaches by Client</h3>{{ ageing_charts.sla_breach_bar|safe }}</div>
-  {% endif %}
-  {% if not ageing_charts.ageing_clients and not ageing_charts.days_hist %}
-  <div class="alert alert-warning">No ageing data found</div>
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 4 else '' }}" id="tab-4" data-loaded="{{ 'true' if default_tab_idx == 4 else 'false' }}">
+  {% if default_tab_idx == 4 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane" id="tab-5">
-  {% if not filtered_has_data %}
-  <div class="alert alert-warning">No tickets match the current filters</div>
-  {% else %}
-  <div class="chart-row">
-    <div class="chart-box">{{ timeline_charts.timeline_created|safe }}</div>
-    <div class="chart-box">{{ timeline_charts.timeline_created_vs_completed|safe }}</div>
-  </div>
-  {% if timeline_charts.timeline_client_area %}
-  <div class="chart-full"><h3>Trend by Client</h3>{{ timeline_charts.timeline_client_area|safe }}</div>
-  {% endif %}
-  {% if timeline_charts.timeline_category %}
-  <div class="chart-full"><h3>Trend by Category</h3>{{ timeline_charts.timeline_category|safe }}</div>
-  {% endif %}
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 5 else '' }}" id="tab-5" data-loaded="{{ 'true' if default_tab_idx == 5 else 'false' }}">
+  {% if default_tab_idx == 5 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane" id="tab-6">
-  <div class="metrics">
-    <div class="metric-card"><div class="val" style="color:var(--success)">{{ sla_charts.compliance_rate }}%</div><div class="lbl">SLA Compliance Rate</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--danger)">{{ sla_charts.total_breaches }}</div><div class="lbl">SLA Breaches</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--success)">{{ sla_charts.total_compliant }}</div><div class="lbl">SLA Compliant</div></div>
-  </div>
-  <div class="chart-row">
-    <div class="chart-box">{{ sla_charts.sla_gauge|safe }}</div>
-    <div class="chart-box">{{ sla_charts.sla_client_bar|safe }}</div>
-  </div>
-  {% if sla_charts.sla_pivot %}
-  <div class="chart-full">
-    <h3>SLA Details by Client and Status</h3>
-    <div class="data-table-wrap">{{ sla_charts.sla_pivot|safe }}</div>
-  </div>
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 6 else '' }}" id="tab-6" data-loaded="{{ 'true' if default_tab_idx == 6 else 'false' }}">
+  {% if default_tab_idx == 6 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane {{ 'active' if single_client_mode and client_category not in ['Development', 'Warranty'] }}" id="tab-7">
-  <div class="edit-bar">
-    <span style="color:#667085;font-weight:600">Total records: {{ data_info.total_filtered }}</span>
-    <span style="flex:1"></span>
-    <button class="btn-save" id="saveBtn" onclick="saveChanges()" style="display:none">Save Changes</button>
-    <button class="btn-cancel" id="cancelBtn" onclick="cancelEdit()" style="display:none">Cancel</button>
-    <button class="btn-edit admin-only" id="editBtn" onclick="toggleEdit()">Enable Editing</button>
-  </div>
-  {% set skip_cols = ['_row_idx', 'Source File'] %}
-  {% for client, rows in detail_by_client.items() %}
-  <div class="client-section">
-    <details>
-      <summary>{{ client }} ({{ rows|length }} tickets)</summary>
-      <div class="data-table-wrap" style="margin-top:8px">
-        <table class="detail-table" data-client="{{ client }}">
-          <thead>
-            <tr>
-              {% if rows[0] is defined %}
-              {% for key in rows[0].keys() %}
-                {% if key not in skip_cols and key != 'Client' %}
-                  <th>{{ key }}</th>
-                {% endif %}
-              {% endfor %}
-              {% endif %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in rows %}
-            <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="{{ row.get('Client', '') }}">
-              {% for key, val in row.items() %}
-                {% if key not in skip_cols and key != 'Client' %}
-                  <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-                {% endif %}
-              {% endfor %}
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </details>
-  </div>
-  {% else %}
-  <div class="alert alert-warning">
-    {% if single_client_mode and filter_options.selected_task_types|length == 1 %}
-    No {{ filter_options.selected_task_types[0] }} tickets found for {{ filter_options.selected_clients[0] }}
-    {% else %}
-    No tickets match the current filters
-    {% endif %}
-  </div>
-  {% endfor %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 7 else '' }}" id="tab-7" data-loaded="{{ 'true' if default_tab_idx == 7 else 'false' }}">
+  {% if default_tab_idx == 7 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane" id="tab-8">
-  <div class="edit-bar">
-    <span style="color:#667085;font-weight:600">Total tickets with ageing: {{ ageing_list_data.total if ageing_list_data.total else 0 }}</span>
-    <span style="flex:1"></span>
-    <button class="btn-save" id="saveBtn8" onclick="saveChanges8()" style="display:none">Save Changes</button>
-    <button class="btn-cancel" id="cancelBtn8" onclick="cancelEdit8()" style="display:none">Cancel</button>
-    <button class="btn-edit admin-only" id="editBtn8" onclick="toggleEdit8()">Enable Editing</button>
-  </div>
-  {% if ageing_list_data.total %}
-  {% set skip_cols_8 = ['_row_idx', 'Source File'] %}
-  {% for bucket, clients in ageing_list_data.buckets.items() %}
-  <div class="client-section">
-    <h4>{{ bucket }} (
-      {% set ns = namespace(count=0) %}
-      {% for c, d in clients.items() %}{% set ns.count = ns.count + d.count %}{% endfor %}
-      {{ ns.count }} tickets)
-    </h4>
-    {% for client, data in clients.items() %}
-    <details>
-      <summary>{{ bucket }} / {{ client }} ({{ data.count }} tickets)</summary>
-      <div class="data-table-wrap" style="max-height:400px;margin-top:8px">
-        <table class="ageing-table">
-          <thead>
-            <tr>
-              {% if data.rows[0] is defined %}
-              {% for key in data.rows[0].keys() %}
-                {% if key not in skip_cols_8 %}
-                <th>{{ key }}</th>
-                {% endif %}
-              {% endfor %}
-              {% endif %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in data.rows %}
-            <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="{{ row.get('Client', '') }}">
-              {% for key, val in row.items() %}
-                {% if key not in skip_cols_8 %}
-                <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-                {% endif %}
-              {% endfor %}
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </details>
-    {% endfor %}
-  </div>
-  {% endfor %}
-  {% else %}
-  <div class="alert alert-warning">No ageing data found</div>
-{% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 8 else '' }}" id="tab-8" data-loaded="{{ 'true' if default_tab_idx == 8 else 'false' }}">
+  {% if default_tab_idx == 8 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane {{ 'active' if not single_client_mode }}" id="tab-9">
-  {% if has_client and overall_client_charts and overall_client_charts.metrics %}
-  <div class="metrics">
-    <div class="metric-card"><div class="val">{{ overall_client_charts.metrics.total }}</div><div class="lbl">Total Projects</div></div>
-    <div class="metric-card"><div class="val" style="color:var(--info)">{{ overall_client_charts.metrics.clients }}</div><div class="lbl">Total Clients</div></div>
-  </div>
-  <div class="chart-row">
-    {% if overall_client_charts.status_pie %}
-    <div class="chart-box">{{ overall_client_charts.status_pie|safe }}</div>
-    {% endif %}
-    {% if overall_client_charts.status_counts %}
-    <div class="chart-box">
-      <h3>Projects by Status</h3>
-      <div class="data-table-wrap">
-        <table>
-          <thead><tr><th>Projek Status</th><th>Count</th></tr></thead>
-          <tbody>
-          {% for s in overall_client_charts.status_counts %}
-            <tr><td>{{ s['Projek Status'] }}</td><td>{{ s['Count'] }}</td></tr>
-          {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% endif %}
-  </div>
-  <div class="chart-full">
-    <div class="edit-bar" style="margin-bottom:4px">
-      <span style="flex:1"></span>
-      <button class="btn-save" id="saveBtn9" onclick="saveChanges9()" style="display:none">Save Changes</button>
-      <button class="btn-cancel" id="cancelBtn9" onclick="cancelEdit9()" style="display:none">Cancel</button>
-      <button class="btn-edit admin-only" id="editBtn9" onclick="toggleEdit9()">Enable Editing</button>
-    </div>
-    {% if overall_client_charts.status_sections %}
-    {% for status, section in overall_client_charts.status_sections.items() %}
-    <h3 style="margin-top:18px">{{ status }} ({{ section.count }})</h3>
-    <div class="data-table-wrap">
-      <table class="client-table">
-        <thead>
-          <tr>
-            {% if section.rows and section.rows[0] is defined %}
-            {% set skip_cols_9 = ['_row_idx', 'Source File'] %}
-            {% for key in section.rows[0].keys() %}
-              {% if key not in skip_cols_9 %}
-              <th>{{ key }}</th>
-              {% endif %}
-            {% endfor %}
-            {% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in section.rows %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="Client">
-            {% for key, val in row.items() %}
-              {% if key not in skip_cols_9 %}
-              {% set display_val = val if val is not none and val != 'None' and val != 'nan' else '' %}
-              {% if key == 'Client' and display_val %}
-              <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ status }}">
-                <span class="client-link">{{ display_val }}</span>
-              </td>
-              {% elif key == 'End Date' and display_val %}
-              <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
-              {% else %}
-              <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
-              {% endif %}
-              {% endif %}
-            {% endfor %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endfor %}
-    {% else %}
-    <h3>Overall Client</h3>
-    <div class="data-table-wrap" id="client-table-wrap">
-      <table id="client-table">
-        <thead>
-          <tr>
-            {% if overall_client_charts.detail_data and overall_client_charts.detail_data[0] is defined %}
-            {% set skip_cols_9 = ['_row_idx', 'Source File'] %}
-            {% for key in overall_client_charts.detail_data[0].keys() %}
-              {% if key not in skip_cols_9 %}
-              <th>{{ key }}</th>
-              {% endif %}
-            {% endfor %}
-            {% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in overall_client_charts.detail_data %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="Client">
-            {% for key, val in row.items() %}
-              {% if key not in skip_cols_9 %}
-              {% set display_val = val if val is not none and val != 'None' and val != 'nan' else '' %}
-              {% if key == 'Client' and display_val %}
-              <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ row.get('Projek Status', '') }}">
-                <span class="client-link">{{ display_val }}</span>
-              </td>
-              {% elif key == 'End Date' and display_val %}
-              <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
-              {% else %}
-              <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
-              {% endif %}
-              {% endif %}
-            {% endfor %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
-  </div>
-  {% else %}
-  <div class="alert alert-warning">No Client data found</div>
-  {% endif %}
+<div class="tab-pane{{ ' active' if default_tab_idx == 9 else '' }}" id="tab-9" data-loaded="{{ 'true' if default_tab_idx == 9 else 'false' }}">
+  {% if default_tab_idx == 9 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
-<div class="tab-pane" id="tab-10">
-  <form method="GET" action="/" class="controls" id="filters">
-    {% if filter_options.min_date %}
-    <div class="control-group">
-      <label>Start Date</label>
-      <input type="date" name="date_start" value="{{ filter_options.date_start }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
-    </div>
-    <div class="control-group">
-      <label>End Date</label>
-      <input type="date" name="date_end" value="{{ filter_options.date_end }}" min="{{ filter_options.min_date }}" max="{{ filter_options.max_date }}">
-    </div>
-    {% endif %}
-    {% for c in filter_options.selected_clients %}
-    <input type="hidden" name="client" value="{{ c }}">
-    {% endfor %}
-    {% if filter_options.priorities %}
-    <div class="control-group filter-dropdown" data-name="priority">
-      <label>Priority</label>
-      <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-        <span class="dt-label">All Priorities</span><span class="chev">&#9662;</span>
-      </button>
-      <div class="dropdown-panel">
-        <div class="dropdown-panel-head">
-          <span class="title">Priority</span>
-          <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-        </div>
-        <div class="options-scroll">
-          {% for p in filter_options.priorities %}
-          <label class="dropdown-option">
-            <input type="checkbox" name="priority" value="{{ p }}" {% if p in filter_options.selected_priorities %}checked{% endif %}>
-            <span>{{ p }}</span>
-          </label>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
-    {% endif %}
-    {% if filter_options.statuses %}
-    <div class="control-group filter-dropdown" data-name="status">
-      <label>Status</label>
-      <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-        <span class="dt-label">All Statuses</span><span class="chev">&#9662;</span>
-      </button>
-      <div class="dropdown-panel">
-        <div class="dropdown-panel-head">
-          <span class="title">Status</span>
-          <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-        </div>
-        <div class="options-scroll">
-          {% for s in filter_options.statuses %}
-          <label class="dropdown-option">
-            <input type="checkbox" name="status" value="{{ s }}" {% if s in filter_options.selected_statuses %}checked{% endif %}>
-            <span>{{ s }}</span>
-          </label>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
-    {% endif %}
-    {% if filter_options.task_types %}
-    <div class="control-group filter-dropdown" data-name="task_type">
-      <label>Task Type</label>
-      <button type="button" class="dropdown-toggle" onclick="toggleFilterDropdown(this)">
-        <span class="dt-label">All Task Types</span><span class="chev">&#9662;</span>
-      </button>
-      <div class="dropdown-panel">
-        <div class="dropdown-panel-head">
-          <span class="title">Task Type</span>
-          <button type="button" class="done-btn" onclick="toggleFilterDropdown(this)">Done</button>
-        </div>
-        <div class="options-scroll">
-          {% for t in filter_options.task_types %}
-          <label class="dropdown-option">
-            <input type="checkbox" name="task_type" value="{{ t }}" {% if t in filter_options.selected_task_types %}checked{% endif %}>
-            <span>{{ t }}</span>
-          </label>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
-    {% endif %}
-    <div class="control-group">
-      <label>Search</label>
-      <input type="text" name="search" placeholder="Search tickets..." value="{{ filter_options.search }}">
-    </div>
-    <div class="control-group">
-      <button type="submit" class="btn-filter">Filter</button>
-    </div>
-  </form>
-  <div class="filter-backdrop" onclick="closeAllFilterDropdowns()"></div>
+<div class="tab-pane{{ ' active' if default_tab_idx == 10 else '' }}" id="tab-10" data-loaded="{{ 'true' if default_tab_idx == 10 else 'false' }}">
+  {% if default_tab_idx == 10 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
 {% endif %}
@@ -1538,21 +1035,74 @@ document.addEventListener('click', function(e) {
   selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'));
 });
 
+/* Script tags set via .innerHTML never execute (a browser/DOM spec
+   quirk, not a bug in this code) -- but every Plotly chart in a tab
+   fragment is exactly a div plus a script tag calling Plotly.newPlot(...),
+   emitted by fig.to_html(), so injecting a lazy-loaded tab's HTML with
+   plain innerHTML leaves every chart on that tab permanently blank.
+   Replacing each inert script with a fresh, identical script element
+   forces the browser to actually run it (window.Plotly is already
+   loaded globally, via the plotly.js script src in <head>). */
+function injectHtmlWithScripts(el, html) {
+  el.innerHTML = html;
+  el.querySelectorAll('script').forEach(function(oldScript) {
+    var newScript = document.createElement('script');
+    for (var i = 0; i < oldScript.attributes.length; i++) {
+      var attr = oldScript.attributes[i];
+      newScript.setAttribute(attr.name, attr.value);
+    }
+    newScript.textContent = oldScript.textContent;
+    oldScript.parentNode.replaceChild(newScript, oldScript);
+  });
+}
+function resizeTabCharts(idx) {
+  document.querySelectorAll('#tab-' + idx + ' .plotly-graph-div').forEach(function(c) {
+    var gd = document.getElementById(c.id);
+    if (gd && gd._fullLayout) { Plotly.Plots.resize(gd); }
+  });
+}
+function afterTabLoad(idx) {
+  resizeTabCharts(idx);
+  applyEndDateBadges();
+  wireEditTables();
+}
+/* ---------- Lazy tab loading ----------
+   Only the tab active on first page load is rendered server-side (see
+   default_tab_idx/default_tab_html in api/index.py); every other tab is
+   an empty placeholder until its first click, when its HTML is fetched
+   from /api/tab/<idx> (same querystring filters as the page) and
+   injected in place. Fetched tabs are cached in the DOM (data-loaded)
+   so re-clicking a tab never re-fetches it. */
 function switchTab(idx, btn) {
   document.querySelectorAll('.tab-btn').forEach(function(b) {
     b.classList.toggle('active', b === btn);
   });
-  document.querySelectorAll('.tab-pane').forEach(function(p, i) {
-    p.classList.toggle('active', i === idx);
+  document.querySelectorAll('.tab-pane').forEach(function(p) {
+    p.classList.toggle('active', p.id === 'tab-' + idx);
   });
-  var charts = document.querySelectorAll('.tab-pane.active .plotly-graph-div');
-  charts.forEach(function(c) {
-    var id = c.id;
-    if (id) {
-      var gd = document.getElementById(id);
-      if (gd && gd._fullLayout) { Plotly.Plots.resize(gd); }
-    }
-  });
+  var pane = document.getElementById('tab-' + idx);
+  if (!pane) return;
+  if (pane.dataset.loaded === 'true') {
+    resizeTabCharts(idx);
+    return;
+  }
+  if (pane.dataset.loading === 'true') return;
+  pane.dataset.loading = 'true';
+  fetch('/api/tab/' + idx + window.location.search)
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    })
+    .then(function(html) {
+      injectHtmlWithScripts(pane, html);
+      pane.dataset.loaded = 'true';
+      pane.dataset.loading = 'false';
+      afterTabLoad(idx);
+    })
+    .catch(function(e) {
+      pane.innerHTML = '<div class="tab-loading">Failed to load: ' + e.message + '</div>';
+      pane.dataset.loading = 'false';
+    });
 }
 window.addEventListener('load', function() {
   setTimeout(function() {
@@ -1915,19 +1465,28 @@ var editTables = [
   ['client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9']
 ];
 
-editTables.forEach(function(args) {
-  if (document.getElementById(args[0])) {
-    makeEditable(args[0], args[1], args[2], args[3]);
+/* Re-run after every lazy tab load, not just once at page-bottom parse
+   time -- makeEditable/makeEditableMulti bind against whatever's in the
+   DOM right now, and a tab's tables don't exist until its first fetch
+   completes. Each guard below already no-ops when its table isn't
+   present, so calling this for a tab that hasn't loaded (or doesn't
+   have an editable table at all) is harmless. */
+function wireEditTables() {
+  editTables.forEach(function(args) {
+    if (document.getElementById(args[0])) {
+      makeEditable(args[0], args[1], args[2], args[3]);
+    }
+  });
+
+  if (document.getElementById('editBtn9')) {
+    makeEditableMulti('client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9', 'tab-9');
   }
-});
 
-if (document.getElementById('editBtn9')) {
-  makeEditableMulti('client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9', 'tab-9');
+  if (document.querySelector('.detail-table')) {
+    makeEditableMulti('detail-table', 'saveBtn', 'cancelBtn', 'editBtn', 'tab-7');
+  }
 }
-
-if (document.querySelector('.detail-table')) {
-  makeEditableMulti('detail-table', 'saveBtn', 'cancelBtn', 'editBtn', 'tab-7');
-}
+wireEditTables();
 
 function toggleEdit() { return false; }
 function saveChanges() { return false; }

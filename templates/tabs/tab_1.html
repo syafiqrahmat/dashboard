@@ -1,0 +1,6 @@
+<div class="chart-full"><h3>Count by Status</h3>{{ comparison_charts.count_by_status|safe }}</div>
+<div class="chart-row">
+  <div class="chart-box">{{ comparison_charts.client_total_bar|safe }}</div>
+</div>
+<div class="chart-full"><h3>Status by Client</h3>{{ comparison_charts.status_by_client|safe }}</div>
+<div class="chart-full"><h3>Status Details by Client</h3><div class="data-table-wrap">{{ comparison_charts.status_pivot|safe }}</div></div>

@@ -187,7 +187,7 @@ def build_warranty_charts(df):
         fig = px.bar(tc, x="Task Type", y="Count", title="Warranty Tickets by Task Type",
                       color="Task Type", text="Count")
         fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False, xaxis_tickangle=-45)
-        charts["task_type_bar"] = fig.to_html(full_html=False, config={"displayModeBar": False})
+        charts["task_type_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
     if "Project" in warranty_df.columns:
         pc = warranty_df["Project"].value_counts().reset_index()
@@ -195,7 +195,7 @@ def build_warranty_charts(df):
         fig = px.bar(pc, x="Project", y="Count", title="Warranty Tickets by Project",
                       color="Project", text="Count")
         fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False, xaxis_tickangle=-45)
-        charts["project_bar"] = fig.to_html(full_html=False, config={"displayModeBar": False})
+        charts["project_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
     display_cols = ["Ticket No", "Task Type", "Project", "Company", "Ticket Title", "Priority", "Ticket Status", "Ticket Created Date", "Days"]
     avail = [c for c in display_cols if c in warranty_df.columns]
@@ -291,25 +291,23 @@ def build_project_charts(df):
 
     if "Client" in df.columns:
         valid_clients = df.dropna(subset=["Client"])
-        if valid_clients.empty:
-            return charts
-        cc = valid_clients["Client"].value_counts().reset_index()
-        cc.columns = ["Client", "Count"]
-        fig = px.bar(cc, x="Client", y="Count", title="Projects by Client",
-                      color="Client", text="Count")
-        fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False)
-        charts["client_bar"] = fig.to_html(full_html=False, config={"displayModeBar": False})
+        if not valid_clients.empty:
+            cc = valid_clients["Client"].value_counts().reset_index()
+            cc.columns = ["Client", "Count"]
+            fig = px.bar(cc, x="Client", y="Count", title="Projects by Client",
+                          color="Client", text="Count")
+            fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False)
+            charts["client_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
     if "Status Progress" in df.columns:
         valid_status = df.dropna(subset=["Status Progress"])
-        if valid_status.empty:
-            return charts
-        sc = valid_status["Status Progress"].value_counts().reset_index()
-        sc.columns = ["Status", "Count"]
-        fig = px.pie(sc, names="Status", values="Count", title="Project Status Progress",
-                      hole=0.3)
-        fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"))
-        charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
+        if not valid_status.empty:
+            sc = valid_status["Status Progress"].value_counts().reset_index()
+            sc.columns = ["Status", "Count"]
+            fig = px.pie(sc, names="Status", values="Count", title="Project Status Progress",
+                          hole=0.3)
+            fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"))
+            charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
     if "Start date" in df.columns and "Due date" in df.columns and "Title" in df.columns:
         valid = df.dropna(subset=["Start date", "Due date", "Title"]).copy()
@@ -811,25 +809,22 @@ def build_sla_charts(df):
     return charts
 
 
-@app.route("/")
-def index():
-    user_role = session.get("role")
-    filters = parse_filters(request.args)
-    try:
-        df, load_errors = load_data(filters)
-    except Exception as e:
-        log(f"DB error loading tickets: {e}", "ERROR")
-        df, load_errors = pd.DataFrame(), [str(e)]
+def default_tab_idx(filters):
+    """Mirrors the exact predicate templates/dashboard.html uses (via its
+    single_client_mode/client_category {% set %}s) to decide which tab-pane
+    gets the "active" class -- kept in one place so index() and
+    build_tab_context() can't drift apart on which tab is "the" default."""
+    if len(filters["clients"]) == 1:
+        category = filters["task_types"][0] if len(filters["task_types"]) == 1 else None
+        if category == "Development":
+            return 3
+        if category == "Warranty":
+            return 2
+        return 7
+    return 9
 
-    # Warranty tickets are stored under a shared "Client Warranty" sentinel
-    # in the tickets table (not the real client name) -- the real client is
-    # only recorded in the Company column. So filtering tickets by the real
-    # client name (as every other category does) always returns zero rows
-    # for Warranty. Detect that case here and fetch a Warranty-appropriate
-    # dataframe instead, scoped by Company rather than Client.
-    client_category = filters["task_types"][0] if len(filters["task_types"]) == 1 else None
-    warranty_client = filters["clients"][0] if (len(filters["clients"]) == 1 and client_category == "Warranty") else None
 
+def build_filter_options(filters):
     try:
         filter_options = db.get_filter_metadata(conn=request_conn())
     except Exception as e:
@@ -842,6 +837,180 @@ def index():
     filter_options["selected_priorities"] = filters["priorities"]
     filter_options["selected_statuses"] = filters["statuses"]
     filter_options["selected_task_types"] = filters["task_types"]
+    return filter_options
+
+
+def build_tab_context(idx, filters, filter_options, df=None):
+    """Returns (template_name, context) for exactly one tab -- the per-tab
+    slice of what index() used to compute unconditionally for all 11 tabs
+    on every request. `df` lets a caller that already loaded the ticket
+    dataframe (index(), for whichever tab is the current default) hand it
+    in instead of paying for a second query."""
+    single_client_mode = len(filters["clients"]) == 1
+    client_category = filters["task_types"][0] if len(filters["task_types"]) == 1 else None
+    common = {
+        "filter_options": filter_options,
+        "single_client_mode": single_client_mode,
+        "client_category": client_category,
+    }
+
+    if idx == 0:
+        if df is None:
+            df, _ = load_data(filters)
+        overview_charts = build_charts(df) if not df.empty else {}
+        return "tabs/tab_0.html", {**common, "overview_charts": overview_charts}
+
+    if idx == 1:
+        if df is None:
+            df, _ = load_data(filters)
+        comparison_charts = build_client_comparison_charts(df) if not df.empty else {}
+        return "tabs/tab_1.html", {**common, "comparison_charts": comparison_charts}
+
+    if idx == 2:
+        # Warranty tickets are stored under a shared "Client Warranty"
+        # sentinel in the tickets table (not the real client name) -- the
+        # real client is only recorded in the Company column. So filtering
+        # tickets by the real client name (as every other category does)
+        # always returns zero rows for Warranty. Detect that case and fetch
+        # a Warranty-appropriate dataframe instead, scoped by Company.
+        warranty_client = filters["clients"][0] if (single_client_mode and client_category == "Warranty") else None
+        if warranty_client:
+            try:
+                warranty_df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
+            except Exception as e:
+                log(f"DB error loading warranty tickets: {e}", "ERROR")
+                warranty_df = pd.DataFrame()
+            if "Company" in warranty_df.columns:
+                warranty_df = warranty_df[warranty_df["Company"] == warranty_client]
+        else:
+            if df is None:
+                df, _ = load_data(filters)
+            warranty_df = df
+        warranty_charts = build_warranty_charts(warranty_df) if not warranty_df.empty else {}
+        return "tabs/tab_2.html", {**common, "warranty_charts": warranty_charts}
+
+    if idx == 3:
+        try:
+            project_df = load_project_data()
+        except Exception as e:
+            log(f"DB error loading projects: {e}", "ERROR")
+            project_df = pd.DataFrame()
+        # The projects table is independent of the tickets table (no shared
+        # filter query), so a client selected via the sidebar/Overall Client
+        # table has to be applied here explicitly to scope the Project tab
+        # to that client.
+        if filters["clients"] and "Client" in project_df.columns:
+            project_df = project_df[project_df["Client"].isin(filters["clients"])]
+        project_df = recompute_status_from_percentage(project_df)
+        project_df = recompute_overall_progress(project_df)
+        has_project = not project_df.empty
+        project_charts = build_project_charts(project_df) if has_project else {}
+        return "tabs/tab_3.html", {**common, "has_project": has_project, "project_charts": project_charts}
+
+    if idx == 4:
+        if df is None:
+            df, _ = load_data(filters)
+        # Matches the shape build_ageing_charts() always returns (even for
+        # a genuinely empty df) -- the template unconditionally iterates
+        # ageing_charts.ageing_clients.items(), so a bare {} would raise
+        # UndefinedError instead of just rendering zero rows.
+        ageing_charts = build_ageing_charts(df) if not df.empty else {"age_order": ["1-30 Days", "31-60 Days", "> 60 Days"], "ageing_clients": {}}
+        return "tabs/tab_4.html", {**common, "ageing_charts": ageing_charts}
+
+    if idx == 5:
+        if df is None:
+            df, _ = load_data(filters)
+        filtered_has_data = not df.empty
+        timeline_charts = build_timeline_charts(df) if filtered_has_data else {}
+        return "tabs/tab_5.html", {**common, "filtered_has_data": filtered_has_data, "timeline_charts": timeline_charts}
+
+    if idx == 6:
+        if df is None:
+            df, _ = load_data(filters)
+        sla_charts = build_sla_charts(df) if not df.empty else {}
+        return "tabs/tab_6.html", {**common, "sla_charts": sla_charts}
+
+    if idx == 7:
+        if df is None:
+            df, _ = load_data(filters)
+        filtered_has_data = not df.empty
+        display_cols = [
+            "Client", "Ticket No", "Task Type", "Project", "Company",
+            "Ticket Title", "Ticket Category", "Priority", "Ticket Status",
+            "Ticket Created Date", "Ticket Completed Date", "Ticket Closed Date",
+            "Days to Close", "Ageing", "SLA Breach",
+        ]
+        avail_cols = [c for c in display_cols if c in df.columns]
+        meta_cols = ["_row_idx", "Source File"]
+        detail_cols = avail_cols + [c for c in meta_cols if c in df.columns]
+        detail_df = df[detail_cols].copy() if filtered_has_data and detail_cols else pd.DataFrame()
+        for col in ("Ticket Created Date", "Ticket Completed Date", "Ticket Closed Date"):
+            if col in detail_df.columns:
+                detail_df[col] = detail_df[col].dt.strftime("%d/%m/%Y")
+        detail_data = detail_df.to_dict("records") if filtered_has_data and not detail_df.empty else []
+        detail_by_client = {}
+        for row in detail_data:
+            client = row.get("Client", "Unknown")
+            detail_by_client.setdefault(client, []).append(row)
+        return "tabs/tab_7.html", {**common, "detail_by_client": detail_by_client, "data_info": {"total_filtered": len(df)}}
+
+    if idx == 8:
+        if df is None:
+            df, _ = load_data(filters)
+        ageing_list_data = {}
+        if not df.empty and "Ageing" in df.columns and df["Ageing"].notna().sum() > 0:
+            age_order = ["1-30 Days", "31-60 Days", "> 60 Days"]
+            ageing_cols = [c for c in ["Client", "Ticket No", "Ticket Title", "Ticket Status", "Priority", "Ticket Created Date", "Days", "_row_idx", "Source File"] if c in df.columns]
+            ageing_df = df.dropna(subset=["Ageing"]).copy()
+            if "Ticket Created Date" in ageing_df.columns:
+                ageing_df["Ticket Created Date"] = ageing_df["Ticket Created Date"].dt.strftime("%d/%m/%Y")
+            ageing_list_data = {"total": int(ageing_df["Ageing"].notna().sum()), "buckets": {}}
+            for bucket in age_order:
+                bucket_df = ageing_df[ageing_df["Ageing"] == bucket]
+                if bucket_df.empty:
+                    continue
+                clients_in_bucket = {}
+                for client in sorted(bucket_df["Client"].unique()):
+                    client_rows_df = bucket_df[bucket_df["Client"] == client]
+                    clients_in_bucket[client] = {
+                        "count": len(client_rows_df),
+                        "rows": client_rows_df[ageing_cols].to_dict("records"),
+                    }
+                ageing_list_data["buckets"][bucket] = clients_in_bucket
+        return "tabs/tab_8.html", {**common, "ageing_list_data": ageing_list_data}
+
+    if idx == 9:
+        try:
+            client_df = load_client_data()
+        except Exception as e:
+            log(f"DB error loading clients: {e}", "ERROR")
+            client_df = pd.DataFrame()
+        has_client = not client_df.empty
+        overall_client_charts = build_overall_client_charts(client_df) if has_client else {}
+        return "tabs/tab_9.html", {**common, "has_client": has_client, "overall_client_charts": overall_client_charts}
+
+    if idx == 10:
+        return "tabs/tab_10.html", common
+
+    raise ValueError(f"Unknown tab index: {idx}")
+
+
+def render_tab_html(idx, filters, filter_options, df=None):
+    template_name, ctx = build_tab_context(idx, filters, filter_options, df=df)
+    return render_template(template_name, **ctx)
+
+
+@app.route("/")
+def index():
+    user_role = session.get("role")
+    filters = parse_filters(request.args)
+    try:
+        df, load_errors = load_data(filters)
+    except Exception as e:
+        log(f"DB error loading tickets: {e}", "ERROR")
+        df, load_errors = pd.DataFrame(), [str(e)]
+
+    filter_options = build_filter_options(filters)
 
     try:
         counts = db.get_counts(conn=request_conn())
@@ -856,7 +1025,6 @@ def index():
     # tickets) would incorrectly collapse the whole dashboard back to the
     # "no data yet" prompt instead of showing that pane empty.
     has_data = counts.get("tickets", 0) > 0
-    filtered_has_data = not df.empty
 
     data_info = {
         "total_raw": counts.get("tickets", len(df)),
@@ -866,140 +1034,37 @@ def index():
         "counts": counts,
     }
 
-    try:
-        project_df = load_project_data()
-    except Exception as e:
-        log(f"DB error loading projects: {e}", "ERROR")
-        project_df = pd.DataFrame()
-    # The projects table is independent of the tickets table (no shared
-    # filter query), so a client selected via the sidebar/Overall Client
-    # table has to be applied here explicitly to scope the Project tab to
-    # that client.
-    if filters["clients"] and "Client" in project_df.columns:
-        project_df = project_df[project_df["Client"].isin(filters["clients"])]
-    project_df = recompute_status_from_percentage(project_df)
-    project_df = recompute_overall_progress(project_df)
-    has_project = not project_df.empty
-
-    try:
-        client_df = load_client_data()
-    except Exception as e:
-        log(f"DB error loading clients: {e}", "ERROR")
-        client_df = pd.DataFrame()
-    has_client = not client_df.empty
-
-    if filtered_has_data:
-        overview_charts = build_charts(df)
-        priority_charts = build_priority_charts(df)
-        ageing_charts = build_ageing_charts(df)
-        comparison_charts = build_client_comparison_charts(df)
-        timeline_charts = build_timeline_charts(df)
-        sla_charts = build_sla_charts(df)
-    else:
-        overview_charts = priority_charts = {}
-        comparison_charts = timeline_charts = sla_charts = {}
-        # Matches the shape build_ageing_charts() always returns (even for
-        # a genuinely empty df) -- the template unconditionally iterates
-        # ageing_charts.ageing_clients.items(), so a bare {} here would
-        # raise UndefinedError instead of just rendering zero rows.
-        ageing_charts = {"age_order": ["1-30 Days", "31-60 Days", "> 60 Days"], "ageing_clients": {}}
-
-    # Warranty is scoped by Company, not the tickets-table Client filter
-    # (see the warranty_client comment above), so it's built independently
-    # of filtered_has_data just like the Project tab.
-    if warranty_client:
-        try:
-            warranty_df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
-        except Exception as e:
-            log(f"DB error loading warranty tickets: {e}", "ERROR")
-            warranty_df = pd.DataFrame()
-        if "Company" in warranty_df.columns:
-            warranty_df = warranty_df[warranty_df["Company"] == warranty_client]
-        warranty_charts = build_warranty_charts(warranty_df)
-    elif filtered_has_data:
-        warranty_charts = build_warranty_charts(df)
-    else:
-        warranty_charts = {}
-
-    # The Project tab is driven by project_df, not the tickets df, so it
-    # must not be blanked out just because the current ticket filter (e.g.
-    # a client viewed under their Development category, which has no
-    # matching Task Type on tickets) happens to match zero tickets.
-    project_charts = build_project_charts(project_df) if has_project else {}
-
-    overall_client_charts = build_overall_client_charts(client_df) if has_client else {}
-
-    display_cols = [
-        "Client", "Ticket No", "Task Type", "Project", "Company",
-        "Ticket Title", "Ticket Category", "Priority", "Ticket Status",
-        "Ticket Created Date", "Ticket Completed Date", "Ticket Closed Date",
-        "Days to Close", "Ageing", "SLA Breach",
-    ]
-    avail_cols = [c for c in display_cols if c in df.columns]
-    meta_cols = ["_row_idx", "Source File"]
-    detail_cols = avail_cols + [c for c in meta_cols if c in df.columns]
-    detail_df = df[detail_cols].copy() if filtered_has_data and detail_cols else pd.DataFrame()
-
-    if "Ticket Created Date" in detail_df.columns:
-        detail_df["Ticket Created Date"] = detail_df["Ticket Created Date"].dt.strftime("%d/%m/%Y")
-    if "Ticket Completed Date" in detail_df.columns:
-        detail_df["Ticket Completed Date"] = detail_df["Ticket Completed Date"].dt.strftime("%d/%m/%Y")
-    if "Ticket Closed Date" in detail_df.columns:
-        detail_df["Ticket Closed Date"] = detail_df["Ticket Closed Date"].dt.strftime("%d/%m/%Y")
-
-    detail_data = detail_df.to_dict("records") if filtered_has_data and not detail_df.empty else []
-    detail_by_client = {}
-    for row in detail_data:
-        client = row.get("Client", "Unknown")
-        detail_by_client.setdefault(client, []).append(row)
-
-    ageing_list_data = {}
-    if filtered_has_data and "Ageing" in df.columns and df["Ageing"].notna().sum() > 0:
-        age_order = ["1-30 Days", "31-60 Days", "> 60 Days"]
-        ageing_cols = [c for c in ["Client", "Ticket No", "Ticket Title", "Ticket Status", "Priority", "Ticket Created Date", "Days", "_row_idx", "Source File"] if c in df.columns]
-        ageing_df = df.dropna(subset=["Ageing"]).copy()
-        if "Ticket Created Date" in ageing_df.columns:
-            ageing_df["Ticket Created Date"] = ageing_df["Ticket Created Date"].dt.strftime("%d/%m/%Y")
-        ageing_list_data = {
-            "total": int(ageing_df["Ageing"].notna().sum()),
-            "buckets": {},
-        }
-        for bucket in age_order:
-            bucket_df = ageing_df[ageing_df["Ageing"] == bucket]
-            if bucket_df.empty:
-                continue
-            clients_in_bucket = {}
-            for client in sorted(bucket_df["Client"].unique()):
-                client_df = bucket_df[bucket_df["Client"] == client]
-                clients_in_bucket[client] = {
-                    "count": len(client_df),
-                    "rows": client_df[ageing_cols].to_dict("records"),
-                }
-            ageing_list_data["buckets"][bucket] = clients_in_bucket
+    # Only the tab that would be "active" by default is computed/rendered
+    # here -- every other tab is fetched lazily by the browser (see
+    # /api/tab/<idx> below and switchTab() in dashboard.html) the first
+    # time the user actually clicks into it, instead of every tab's charts
+    # being built on every single page view.
+    idx = default_tab_idx(filters)
+    default_tab_html = render_tab_html(idx, filters, filter_options, df=df)
 
     return render_template(
         "dashboard.html",
         user_role=user_role,
         has_data=has_data,
-        filtered_has_data=filtered_has_data,
-        has_project=has_project,
-        has_client=has_client,
         data_info=data_info,
         filter_options=filter_options,
-        overview_charts=overview_charts,
-        priority_charts=priority_charts,
-        ageing_charts=ageing_charts,
-        comparison_charts=comparison_charts,
-        timeline_charts=timeline_charts,
-        sla_charts=sla_charts,
-        warranty_charts=warranty_charts,
-        project_charts=project_charts,
-        overall_client_charts=overall_client_charts,
-        project_data=project_df.to_dict("records") if has_project else [],
-        detail_by_client=detail_by_client,
-        ageing_list_data=ageing_list_data,
+        default_tab_idx=idx,
+        default_tab_html=default_tab_html,
         now=datetime.now().strftime("%d-%m-%Y %H:%M"),
     )
+
+
+@app.route("/api/tab/<int:idx>")
+def api_tab(idx):
+    if idx < 0 or idx > 10:
+        return "Not found", 404
+    filters = parse_filters(request.args)
+    filter_options = build_filter_options(filters)
+    try:
+        return render_tab_html(idx, filters, filter_options)
+    except Exception as e:
+        log(f"Tab {idx} render error: {e}", "ERROR")
+        return f"<div class='tab-loading'>Failed to load: {e}</div>", 500
 
 
 def require_admin():

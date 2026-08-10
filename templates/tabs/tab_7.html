@@ -1,0 +1,49 @@
+<div class="edit-bar">
+  <span style="color:#667085;font-weight:600">Total records: {{ data_info.total_filtered }}</span>
+  <span style="flex:1"></span>
+  <button class="btn-save" id="saveBtn" onclick="saveChanges()" style="display:none">Save Changes</button>
+  <button class="btn-cancel" id="cancelBtn" onclick="cancelEdit()" style="display:none">Cancel</button>
+  <button class="btn-edit admin-only" id="editBtn" onclick="toggleEdit()">Enable Editing</button>
+</div>
+{% set skip_cols = ['_row_idx', 'Source File'] %}
+{% for client, rows in detail_by_client.items() %}
+<div class="client-section">
+  <details>
+    <summary>{{ client }} ({{ rows|length }} tickets)</summary>
+    <div class="data-table-wrap" style="margin-top:8px">
+      <table class="detail-table" data-client="{{ client }}">
+        <thead>
+          <tr>
+            {% if rows[0] is defined %}
+            {% for key in rows[0].keys() %}
+              {% if key not in skip_cols and key != 'Client' %}
+                <th>{{ key }}</th>
+              {% endif %}
+            {% endfor %}
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="{{ row.get('Client', '') }}">
+            {% for key, val in row.items() %}
+              {% if key not in skip_cols and key != 'Client' %}
+                <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+              {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+{% else %}
+<div class="alert alert-warning">
+  {% if single_client_mode and filter_options.selected_task_types|length == 1 %}
+  No {{ filter_options.selected_task_types[0] }} tickets found for {{ filter_options.selected_clients[0] }}
+  {% else %}
+  No tickets match the current filters
+  {% endif %}
+</div>
+{% endfor %}

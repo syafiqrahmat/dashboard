@@ -1,0 +1,19 @@
+{% if overview_charts and overview_charts.metrics %}
+<div class="metrics">
+  <div class="metric-card"><div class="val">{{ overview_charts.metrics.total }}</div><div class="lbl">Total Tickets</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--success)">{{ overview_charts.metrics.completed }}</div><div class="lbl">Completed <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.completed_pct }})</span></div></div>
+  <div class="metric-card"><div class="val" style="color:var(--warning)">{{ overview_charts.metrics.pending }}</div><div class="lbl">Pending <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.pending_pct }})</span></div></div>
+  <div class="metric-card"><div class="val" style="color:var(--danger)">{{ overview_charts.metrics.in_progress }}</div><div class="lbl">In Progress <span style="color:var(--text-dim);font-size:0.75rem;text-transform:none">({{ overview_charts.metrics.in_progress_pct }})</span></div></div>
+  <div class="metric-card"><div class="val" style="color:var(--danger)">{{ overview_charts.metrics.sla_breach }}</div><div class="lbl">SLA Breaches</div></div>
+  <div class="metric-card"><div class="val">{{ overview_charts.metrics.avg_days if overview_charts.metrics.avg_days else "N/A" }}</div><div class="lbl">Avg Days to Complete</div></div>
+</div>
+<hr>
+<div class="chart-row">
+  <div class="chart-box">{{ overview_charts.status_pie|safe }}</div>
+  <div class="chart-box">{{ overview_charts.priority_pie|safe }}</div>
+</div>
+<hr>
+<div class="chart-full">{{ overview_charts.client_bar|safe }}</div>
+{% else %}
+<div class="alert alert-warning">No tickets match the current filters</div>
+{% endif %}

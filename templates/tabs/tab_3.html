@@ -1,0 +1,69 @@
+{% if has_project and project_charts and project_charts.metrics %}
+<div class="metrics">
+  <div class="metric-card"><div class="val">{{ project_charts.metrics.total }}</div><div class="lbl">Total Projects</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--success)">{{ project_charts.metrics.completed }}</div><div class="lbl">Completed</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--info)">{{ project_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--neutral)">{{ project_charts.metrics.not_started }}</div><div class="lbl">Not Started</div></div>
+</div>
+<div class="chart-row">
+  <div class="chart-box">{{ project_charts.client_bar|safe }}</div>
+  <div class="chart-box">{{ project_charts.status_pie|safe }}</div>
+</div>
+{% if project_charts.timeline_chart %}
+<div class="chart-full"><h3>PROJECT DEVELOPMENT TIMELINE</h3>{{ project_charts.timeline_chart|safe }}</div>
+{% else %}
+<div class="alert alert-warning">No timeline data</div>
+{% endif %}
+<div class="chart-full">
+  <h3>Project Details</h3>
+  <div class="edit-bar" style="margin-bottom:4px">
+    <span style="flex:1"></span>
+    <button class="btn-save" id="saveBtn3" onclick="saveChanges3()" style="display:none">Save Changes</button>
+    <button class="btn-cancel" id="cancelBtn3" onclick="cancelEdit3()" style="display:none">Cancel</button>
+    <button class="btn-edit admin-only" id="editBtn3" onclick="toggleEdit3()">Enable Editing</button>
+  </div>
+  <div class="data-table-wrap" id="project-table-wrap">
+    <table id="project-table">
+      <thead>
+        <tr>
+          {% if project_charts.detail_data and project_charts.detail_data[0] is defined %}
+          {% set skip_cols_3 = ['_row_idx', '_source_file', '_op_rowspan'] %}
+          {% for key in project_charts.detail_data[0].keys() %}
+            {% if key not in skip_cols_3 %}
+            <th>{{ key }}</th>
+            {% endif %}
+          {% endfor %}
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% set ns_op = namespace(group=0) %}
+        {% for row in project_charts.detail_data %}
+          {% if row.get('_op_rowspan', 1) > 0 %}{% set ns_op.group = ns_op.group + 1 %}{% endif %}
+        <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" data-op-group="{{ ns_op.group }}" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
+          {% for key, val in row.items() %}
+            {% if key == 'Overall Progress Task (%)' %}
+              {% if row.get('_op_rowspan', 1) > 0 %}
+              <td class="op-merged-cell" id="op-cell-{{ ns_op.group }}" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+              {% endif %}
+            {% elif key in ('Progress', 'Status Progress') %}
+            <td class="derived-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+            {% elif key not in skip_cols_3 %}
+            <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-warning">
+  {% if single_client_mode %}
+  No Project data found for {{ filter_options.selected_clients[0] }}
+  {% else %}
+  No Project data found
+  {% endif %}
+</div>
+{% endif %}

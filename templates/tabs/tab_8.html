@@ -1,0 +1,52 @@
+<div class="edit-bar">
+  <span style="color:#667085;font-weight:600">Total tickets with ageing: {{ ageing_list_data.total if ageing_list_data.total else 0 }}</span>
+  <span style="flex:1"></span>
+  <button class="btn-save" id="saveBtn8" onclick="saveChanges8()" style="display:none">Save Changes</button>
+  <button class="btn-cancel" id="cancelBtn8" onclick="cancelEdit8()" style="display:none">Cancel</button>
+  <button class="btn-edit admin-only" id="editBtn8" onclick="toggleEdit8()">Enable Editing</button>
+</div>
+{% if ageing_list_data.total %}
+{% set skip_cols_8 = ['_row_idx', 'Source File'] %}
+{% for bucket, clients in ageing_list_data.buckets.items() %}
+<div class="client-section">
+  <h4>{{ bucket }} (
+    {% set ns = namespace(count=0) %}
+    {% for c, d in clients.items() %}{% set ns.count = ns.count + d.count %}{% endfor %}
+    {{ ns.count }} tickets)
+  </h4>
+  {% for client, data in clients.items() %}
+  <details>
+    <summary>{{ bucket }} / {{ client }} ({{ data.count }} tickets)</summary>
+    <div class="data-table-wrap" style="max-height:400px;margin-top:8px">
+      <table class="ageing-table">
+        <thead>
+          <tr>
+            {% if data.rows[0] is defined %}
+            {% for key in data.rows[0].keys() %}
+              {% if key not in skip_cols_8 %}
+              <th>{{ key }}</th>
+              {% endif %}
+            {% endfor %}
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data.rows %}
+          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="{{ row.get('Client', '') }}">
+            {% for key, val in row.items() %}
+              {% if key not in skip_cols_8 %}
+              <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+              {% endif %}
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endfor %}
+</div>
+{% endfor %}
+{% else %}
+<div class="alert alert-warning">No ageing data found</div>
+{% endif %}

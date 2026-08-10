@@ -1,0 +1,29 @@
+{% if ageing_charts.total_ageing is defined %}
+<div class="metrics"><div class="metric-card"><div class="val">{{ ageing_charts.total_ageing }}</div><div class="lbl">Total Ageing Records</div></div></div>
+{% endif %}
+{% for client, data in ageing_charts.ageing_clients.items() %}
+<div class="client-section">
+  <h4>{{ client }} ({{ data.count }} records)</h4>
+  <div class="chart-row">
+    <div class="chart-box" style="flex:0.4;min-width:200px">
+      <table>
+        <tr><th>Age Group</th><th>Count</th></tr>
+        {% for age in ageing_charts.age_order %}
+        <tr><td>{{ age }}</td><td>{{ data.table[age] }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    <div class="chart-box" style="flex:1">{{ data.chart|safe }}</div>
+  </div>
+</div>
+{% endfor %}
+{% if ageing_charts.days_hist %}
+<hr>
+<div class="chart-full"><h3>Days Open Distribution</h3>{{ ageing_charts.days_hist|safe }}</div>
+{% endif %}
+{% if ageing_charts.sla_breach_bar %}
+<div class="chart-full"><h3>SLA Breaches by Client</h3>{{ ageing_charts.sla_breach_bar|safe }}</div>
+{% endif %}
+{% if not ageing_charts.ageing_clients and not ageing_charts.days_hist %}
+<div class="alert alert-warning">No ageing data found</div>
+{% endif %}

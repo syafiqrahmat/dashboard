@@ -1,0 +1,58 @@
+{% if warranty_charts and warranty_charts.metrics %}
+<div class="metrics">
+  <div class="metric-card"><div class="val">{{ warranty_charts.metrics.total }}</div><div class="lbl">Total Warranty Tickets</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--success)">{{ warranty_charts.metrics.completed }}</div><div class="lbl">Completed</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--warning)">{{ warranty_charts.metrics.pending }}</div><div class="lbl">Pending</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--danger)">{{ warranty_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--danger)">{{ warranty_charts.metrics.sla_breach }}</div><div class="lbl">SLA Breaches</div></div>
+</div>
+<div class="chart-row">
+  <div class="chart-box">{{ warranty_charts.status_pie|safe }}</div>
+  <div class="chart-box">{{ warranty_charts.task_type_bar|safe }}</div>
+</div>
+<div class="chart-full">{{ warranty_charts.project_bar|safe }}</div>
+<div class="chart-full">
+  <h3>Warranty Ticket Details</h3>
+  <div class="edit-bar" style="margin-bottom:4px">
+    <span style="flex:1"></span>
+    <button class="btn-save" id="saveBtn2" onclick="saveChanges2()" style="display:none">Save Changes</button>
+    <button class="btn-cancel" id="cancelBtn2" onclick="cancelEdit2()" style="display:none">Cancel</button>
+    <button class="btn-edit admin-only" id="editBtn2" onclick="toggleEdit2()">Enable Editing</button>
+  </div>
+  <div class="data-table-wrap" id="warranty-table-wrap">
+    <table id="warranty-table">
+      <thead>
+        <tr>
+          {% if warranty_charts.detail_data and warranty_charts.detail_data[0] is defined %}
+          {% set skip_cols_2 = ['_row_idx', 'Source File'] %}
+          {% for key in warranty_charts.detail_data[0].keys() %}
+            {% if key not in skip_cols_2 %}
+            <th>{{ key }}</th>
+            {% endif %}
+          {% endfor %}
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in warranty_charts.detail_data %}
+        <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="Client Warranty">
+          {% for key, val in row.items() %}
+            {% if key not in skip_cols_2 %}
+            <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-warning">
+  {% if single_client_mode and client_category == 'Warranty' %}
+  No Warranty data found for {{ filter_options.selected_clients[0] }}
+  {% else %}
+  No Warranty data found
+  {% endif %}
+</div>
+{% endif %}

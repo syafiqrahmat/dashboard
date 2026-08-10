@@ -1,0 +1,14 @@
+{% if not filtered_has_data %}
+<div class="alert alert-warning">No tickets match the current filters</div>
+{% else %}
+<div class="chart-row">
+  <div class="chart-box">{{ timeline_charts.timeline_created|safe }}</div>
+  <div class="chart-box">{{ timeline_charts.timeline_created_vs_completed|safe }}</div>
+</div>
+{% if timeline_charts.timeline_client_area %}
+<div class="chart-full"><h3>Trend by Client</h3>{{ timeline_charts.timeline_client_area|safe }}</div>
+{% endif %}
+{% if timeline_charts.timeline_category %}
+<div class="chart-full"><h3>Trend by Category</h3>{{ timeline_charts.timeline_category|safe }}</div>
+{% endif %}
+{% endif %}

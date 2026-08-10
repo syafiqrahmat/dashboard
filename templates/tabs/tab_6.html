@@ -1,0 +1,15 @@
+<div class="metrics">
+  <div class="metric-card"><div class="val" style="color:var(--success)">{{ sla_charts.compliance_rate }}%</div><div class="lbl">SLA Compliance Rate</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--danger)">{{ sla_charts.total_breaches }}</div><div class="lbl">SLA Breaches</div></div>
+  <div class="metric-card"><div class="val" style="color:var(--success)">{{ sla_charts.total_compliant }}</div><div class="lbl">SLA Compliant</div></div>
+</div>
+<div class="chart-row">
+  <div class="chart-box">{{ sla_charts.sla_gauge|safe }}</div>
+  <div class="chart-box">{{ sla_charts.sla_client_bar|safe }}</div>
+</div>
+{% if sla_charts.sla_pivot %}
+<div class="chart-full">
+  <h3>SLA Details by Client and Status</h3>
+  <div class="data-table-wrap">{{ sla_charts.sla_pivot|safe }}</div>
+</div>
+{% endif %}
