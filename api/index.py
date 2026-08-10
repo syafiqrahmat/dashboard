@@ -77,6 +77,7 @@ pio.templates.default = "plotly_white"
 
 TICKET_DB_COL_BY_DISPLAY = {display: col for display, col in db.TICKET_DB_COLUMNS}
 CLIENT_DB_COL_BY_DISPLAY = {display: col for display, col in db.CLIENT_DB_COLUMNS}
+PROJECT_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_DB_COLUMNS}
 
 _schema_ready = False
 
@@ -239,6 +240,37 @@ def recompute_overall_progress(df):
 
     overall_by_group = df.groupby(["Client", "Title"]).apply(lambda g: group_overall(g.index), include_groups=False)
     df["Overall Progress Task (%)"] = df.set_index(["Client", "Title"]).index.map(overall_by_group).to_numpy()
+    return df
+
+
+def recompute_status_from_percentage(df):
+    """Status Progress and Progress are meant to track each row's own
+    Percentage (0 = Not Started, 1-99 = In Progress, 100 = Completed), but
+    rows saved before that rule existed -- or edited directly in the
+    source spreadsheet -- can carry a stale label that no longer matches
+    the number. Recompute both label columns from Percentage on every
+    load so they (and the metrics/pie chart that count them) never drift
+    out of sync with it. Rows with a blank/non-numeric Percentage are left
+    untouched since there's nothing to derive a label from.
+    """
+    if df.empty or "Percentage" not in df.columns:
+        return df
+
+    df = df.copy()
+    pct = pd.to_numeric(df["Percentage"], errors="coerce")
+    has_pct = pct.notna()
+
+    def label(n):
+        if n <= 0:
+            return "Not Started"
+        if n >= 100:
+            return "Completed"
+        return "In Progress"
+
+    status = pct.apply(lambda n: label(n) if pd.notna(n) else None)
+    for col in ("Status Progress", "Progress"):
+        if col in df.columns:
+            df.loc[has_pct, col] = status.loc[has_pct]
     return df
 
 
@@ -845,6 +877,7 @@ def index():
     # that client.
     if filters["clients"] and "Client" in project_df.columns:
         project_df = project_df[project_df["Client"].isin(filters["clients"])]
+    project_df = recompute_status_from_percentage(project_df)
     project_df = recompute_overall_progress(project_df)
     has_project = not project_df.empty
 
@@ -1187,6 +1220,16 @@ def api_save():
             return {"success": False, "error": f"Column not editable: {column}"}
         try:
             db.update_client_field(int(row_idx), db_column, value, conn=request_conn())
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    if sheet == "Client Project":
+        db_column = PROJECT_DB_COL_BY_DISPLAY.get(column)
+        if not db_column:
+            return {"success": False, "error": f"Column not editable: {column}"}
+        try:
+            db.update_project_field(int(row_idx), db_column, value, conn=request_conn())
             return {"success": True}
         except Exception as e:
             return {"success": False, "error": str(e)}

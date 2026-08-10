@@ -569,3 +569,15 @@ def update_client_field(row_id, db_column, value, conn=None):
                 f"UPDATE clients SET {db_column} = %s, updated_at = now() WHERE id = %s",
                 (value, row_id),
             )
+
+
+def update_project_field(row_id, db_column, value, conn=None):
+    valid_cols = {c for _, c in PROJECT_DB_COLUMNS}
+    if db_column not in valid_cols:
+        raise ValueError(f"Unknown column: {db_column}")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                f"UPDATE projects SET {db_column} = %s, updated_at = now() WHERE id = %s",
+                (value, row_id),
+            )

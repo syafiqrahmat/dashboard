@@ -1661,11 +1661,12 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
           setTimeout(function() {
             if (errors.length === 0) {
               showToast('Saved ' + saved + ' change(s) successfully!', 'success');
+              window.location.reload();
             } else {
               showToast('Saved ' + saved + '/' + pending.length + '. Errors: ' + errors.join('; '), 'error');
+              editMode = true;
+              toggle();
             }
-            editMode = true;
-            toggle();
           }, 500);
         }
       });
@@ -1744,10 +1745,11 @@ function syncPercentageInput(inp) {
   inp.value = n.toFixed(2);
   var tr = inp.closest('tr');
   if (!tr) return;
+  var label = statusForPercentage(n);
   var statusCell = tr.querySelector('td[data-col="Status Progress"]');
-  if (statusCell) statusCell.textContent = statusForPercentage(n);
+  if (statusCell) statusCell.textContent = label;
   var progressCell = tr.querySelector('td[data-col="Progress"]');
-  if (progressCell) progressCell.textContent = n.toFixed(2);
+  if (progressCell) progressCell.textContent = label;
   recomputeOverallProgress(tr);
 }
 function recomputeOverallProgress(tr) {
@@ -1881,8 +1883,17 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
       .finally(function() {
         if (idx === pending.length - 1) {
           setTimeout(function() {
-            showToast(errors.length === 0 ? 'Saved ' + saved + ' change(s) successfully!' : 'Saved ' + saved + '/' + pending.length + '. Errors: ' + errors.join('; '), errors.length === 0 ? 'success' : 'error');
-            toggle();
+            if (errors.length === 0) {
+              // Reload so any values the backend recomputes from what was
+              // just saved (Overall Progress Task (%), Status Progress vs.
+              // Percentage, chart/metric counts, etc.) come back fresh
+              // instead of only showing the client-side preview.
+              showToast('Saved ' + saved + ' change(s) successfully!', 'success');
+              window.location.reload();
+            } else {
+              showToast('Saved ' + saved + '/' + pending.length + '. Errors: ' + errors.join('; '), 'error');
+              toggle();
+            }
           }, 500);
         }
       });
