@@ -55,7 +55,7 @@
             {% if key not in skip_cols_9 %}
             {% set display_val = val if val is not none and val != 'None' and val != 'nan' else '' %}
             {% if key == 'Client' and display_val %}
-            <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ status }}">
+            <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ status }}" data-projek-name="{{ row.get('Projek Name', '') }}">
               <span class="client-link">{{ display_val }}</span>
             </td>
             {% elif key == 'End Date' and display_val %}
@@ -94,7 +94,7 @@
             {% if key not in skip_cols_9 %}
             {% set display_val = val if val is not none and val != 'None' and val != 'nan' else '' %}
             {% if key == 'Client' and display_val %}
-            <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ row.get('Projek Status', '') }}">
+            <td class="editable-cell client-cell" data-col="{{ key }}" data-client="{{ display_val }}" data-status="{{ row.get('Projek Status', '') }}" data-projek-name="{{ row.get('Projek Name', '') }}">
               <span class="client-link">{{ display_val }}</span>
             </td>
             {% elif key == 'End Date' and display_val %}

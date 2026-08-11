@@ -1051,7 +1051,7 @@ function applyEndDateBadges() {
 }
 document.addEventListener('DOMContentLoaded', applyEndDateBadges);
 
-function selectClient(name, category) {
+function selectClient(name, category, projekName) {
   // Entering (or leaving) a client's page always drops any leftover
   // Priority/Status/Task Type/date/search filter from the Overall Client
   // page -- except the category the client was clicked under (Development
@@ -1059,10 +1059,15 @@ function selectClient(name, category) {
   // client with tickets in more than one category only shows the one that
   // was clicked. If that client has no tickets in this exact category,
   // the result is genuinely empty rather than silently falling back to
-  // showing every category mixed together.
+  // showing every category mixed together. projekName narrows further to
+  // the specific project clicked (e.g. "MYOT MARA" vs "MYCLAIM MARA" under
+  // the same client) -- server-side this is a best-effort match against
+  // the tickets' own Project column that falls back to showing everything
+  // if nothing lines up, so it's safe to always pass through.
   var params = new URLSearchParams();
   if (name) params.set('client', name);
   if (category) params.set('task_type', category);
+  if (projekName) params.set('projek_name', projekName);
   window.location.search = params.toString();
 }
 document.addEventListener('click', function(e) {
@@ -1073,7 +1078,7 @@ document.addEventListener('click', function(e) {
   var table = row.closest('table');
   if (table && table.classList.contains('edit-mode')) return;
   e.preventDefault();
-  selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'));
+  selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'), cell.getAttribute('data-projek-name'));
 });
 
 /* Script tags set via .innerHTML never execute (a browser/DOM spec
@@ -1635,7 +1640,7 @@ var editTables = [
     // are derived placeholders here (not sent to /api/add_row) purely to
     // keep the new row's cells aligned under the right header columns.
     columns: [
-      'Client', 'Title', 'Description', 'Category',
+      'Client', 'Title', 'Projek Name', 'Description', 'Category',
       {col: 'Progress', derived: true, placeholder: 'Not Started'},
       'Priority', 'Start date', 'Due date', 'Target Date', 'Duration', 'Assigned to',
       {col: 'Status Progress', derived: true, placeholder: 'Not Started'},

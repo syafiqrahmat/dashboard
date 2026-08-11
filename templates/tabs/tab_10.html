@@ -12,6 +12,9 @@
   {% for c in filter_options.selected_clients %}
   <input type="hidden" name="client" value="{{ c }}">
   {% endfor %}
+  {% if filter_options.projek_name %}
+  <input type="hidden" name="projek_name" value="{{ filter_options.projek_name }}">
+  {% endif %}
   {% if filter_options.priorities %}
   <div class="control-group filter-dropdown" data-name="priority">
     <label>Priority</label>

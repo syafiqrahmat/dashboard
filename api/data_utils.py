@@ -34,8 +34,8 @@ COLUMN_MAPPING = {
     "task type": "Task Type",
     "task_type": "Task Type",
     "project": "Project",
-    "projek name": "Project",
-    "projek_name": "Project",
+    "projek name": "Projek Name",
+    "projek_name": "Projek Name",
     "company": "Company",
     "ticket title": "Ticket Title",
     "ticket_title": "Ticket Title",
@@ -213,6 +213,19 @@ def parse_ticket_sheet(df, client, source_file):
     df = standardize_columns(df)
     if df.empty:
         return df, {"rows_dropped": 0, "unmapped_columns": []}
+
+    # "Projek Name" is the same concept as this sheet's own "Project"
+    # column under a different header some source CSVs use -- fold it in
+    # here rather than in the shared COLUMN_MAPPING, since the Client
+    # sheet's own genuinely-distinct "Projek Name" field (a different
+    # concept there) would otherwise get renamed away to "Project" too
+    # and go missing on Client-sheet uploads.
+    if "Projek Name" in df.columns:
+        if "Project" in df.columns:
+            df["Project"] = df["Project"].fillna(df["Projek Name"])
+        else:
+            df = df.rename(columns={"Projek Name": "Project"})
+        df = df.drop(columns=["Projek Name"], errors="ignore")
 
     if "Client" not in df.columns or df["Client"].isna().all():
         df["Client"] = client
