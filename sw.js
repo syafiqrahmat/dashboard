@@ -1,4 +1,4 @@
-const CACHE_NAME = "sw-dashboard-v1";
+const CACHE_NAME = "sw-dashboard-__SW_VERSION__";
 const APP_SHELL = [
   "/manifest.json",
   "/sw.svg",

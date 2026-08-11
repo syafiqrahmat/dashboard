@@ -581,3 +581,95 @@ def update_project_field(row_id, db_column, value, conn=None):
                 f"UPDATE projects SET {db_column} = %s, updated_at = now() WHERE id = %s",
                 (value, row_id),
             )
+
+
+def _clean_insert_values(db_values, valid_cols):
+    """Keep only known columns, and drop blank/None ones so an untouched
+    field gets its SQL default/NULL instead of an empty string that would
+    raise a cast error on a DATE/NUMERIC column."""
+    return {
+        col: val for col, val in db_values.items()
+        if col in valid_cols and val is not None and str(val).strip() != ""
+    }
+
+
+def insert_ticket_row(db_values, conn=None):
+    values = _clean_insert_values(db_values, {c for _, c in TICKET_DB_COLUMNS})
+    if not values.get("client"):
+        raise ValueError("Client is required")
+    if not values.get("ticket_no"):
+        raise ValueError("Ticket No is required")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM tickets WHERE client = %s AND ticket_no = %s",
+                (values["client"], values["ticket_no"]),
+            )
+            if cur.fetchone():
+                raise ValueError(f"Ticket No \"{values['ticket_no']}\" already exists for {values['client']}")
+            cols = list(values.keys())
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["%s"] * len(cols))
+            cur.execute(
+                f"INSERT INTO tickets ({col_list}) VALUES ({placeholders}) RETURNING id",
+                [values[c] for c in cols],
+            )
+            return cur.fetchone()[0]
+
+
+def insert_project_row(db_values, conn=None):
+    values = _clean_insert_values(db_values, {c for _, c in PROJECT_DB_COLUMNS} - {"dedup_seq"})
+    if not values.get("client"):
+        raise ValueError("Client is required")
+    if not values.get("title"):
+        raise ValueError("Title is required")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            # Mirrors idx_projects_dedup_key: dedup_seq is "how many rows
+            # already share this key," so a lone hand-typed row lands on
+            # the next free slot instead of colliding with an existing one.
+            cur.execute(
+                """SELECT COUNT(*) FROM projects
+                   WHERE COALESCE(client,'') = COALESCE(%s,'')
+                     AND COALESCE(title,'') = COALESCE(%s,'')
+                     AND COALESCE(start_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
+                     AND COALESCE(due_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
+                     AND COALESCE(description,'') = COALESCE(%s,'')""",
+                (
+                    values.get("client"), values.get("title"),
+                    values.get("start_date"), values.get("due_date"),
+                    values.get("description"),
+                ),
+            )
+            dedup_seq = cur.fetchone()[0]
+            cols = list(values.keys())
+            col_list = ", ".join(cols + ["dedup_seq"])
+            placeholders = ", ".join(["%s"] * (len(cols) + 1))
+            cur.execute(
+                f"INSERT INTO projects ({col_list}) VALUES ({placeholders}) RETURNING id",
+                [values[c] for c in cols] + [dedup_seq],
+            )
+            return cur.fetchone()[0]
+
+
+def insert_client_row(db_values, conn=None):
+    values = _clean_insert_values(db_values, {c for _, c in CLIENT_DB_COLUMNS})
+    if not values.get("client"):
+        raise ValueError("Client is required")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            if values.get("projek_id"):
+                cur.execute(
+                    "SELECT 1 FROM clients WHERE client = %s AND projek_id = %s",
+                    (values["client"], values["projek_id"]),
+                )
+                if cur.fetchone():
+                    raise ValueError(f"Projek ID \"{values['projek_id']}\" already exists for {values['client']}")
+            cols = list(values.keys())
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["%s"] * len(cols))
+            cur.execute(
+                f"INSERT INTO clients ({col_list}) VALUES ({placeholders}) RETURNING id",
+                [values[c] for c in cols],
+            )
+            return cur.fetchone()[0]

@@ -1,9 +1,31 @@
 <div class="edit-bar">
   <span style="color:#667085;font-weight:600">Total records: {{ data_info.total_filtered }}</span>
   <span style="flex:1"></span>
+  <button class="btn-add-row admin-only" id="addTicketBtn" type="button" style="display:none">+ Add Ticket</button>
   <button class="btn-save" id="saveBtn" onclick="saveChanges()" style="display:none">Save Changes</button>
   <button class="btn-cancel" id="cancelBtn" onclick="cancelEdit()" style="display:none">Cancel</button>
   <button class="btn-edit admin-only" id="editBtn" onclick="toggleEdit()">Enable Editing</button>
+</div>
+{#- Tickets in this tab are grouped into a separate table per client, so
+    there's no single existing table a new ticket (which may belong to a
+    brand-new client) can be appended to. This standalone table is always
+    present (empty until "+ Add Ticket" is clicked) and includes its own
+    Client column, unlike the per-client tables above where Client is
+    implied by which section the table is in. #}
+<div class="client-section admin-only">
+  <div class="data-table-wrap">
+    <table id="add-ticket-table">
+      <thead>
+        <tr>
+          <th>Client</th><th>Ticket No</th><th>Task Type</th><th>Project</th><th>Company</th>
+          <th>Ticket Title</th><th>Ticket Detail</th><th>Ticket Category</th><th>Priority</th>
+          <th>Ticket Status</th><th>Ticket Created Date</th><th>Ticket Completed Date</th>
+          <th>Ticket Closed Date</th><th>SLA Dateline</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </div>
 {% set skip_cols = ['_row_idx', 'Source File'] %}
 {% for client, rows in detail_by_client.items() %}

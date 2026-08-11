@@ -277,6 +277,14 @@ body::after{
 .end-date-badge.overdue{background:#e0392c;color:#fff}
 .derived-cell{color:var(--text-dim);background:rgba(0,0,0,0.03);cursor:not-allowed}
 .tab-loading{padding:60px 20px;text-align:center;color:var(--text-dim);font-size:0.95rem}
+tr[data-new-row="true"]{background:rgba(44,95,130,0.05)}
+.btn-remove-row{float:left;margin-right:6px;width:18px;height:18px;line-height:16px;padding:0;
+  border:1px solid var(--danger);border-radius:50%;background:#fff;color:var(--danger);
+  font-size:0.75rem;font-weight:700;cursor:pointer;text-align:center}
+.btn-remove-row:hover{background:var(--danger);color:#fff}
+.btn-add-row{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 14px;
+  font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:8px}
+.btn-add-row:hover{opacity:0.9}
 @keyframes endDateBadgeIn{
   0%{opacity:0;transform:translateY(-4px) scale(0.85)}
   100%{opacity:1;transform:translateY(0) scale(1)}
@@ -775,9 +783,42 @@ body.role-admin .viewer-only-note{display:none}
 </div>
 
 <script>
+/* ---------- "New version available" prompt --------------------------
+   sw.js is served with the current deploy's commit SHA baked into its
+   cache name (see SW_VERSION in api/index.py), so its bytes change on
+   every deploy and the browser reliably notices an update. We don't
+   auto-reload on that, though -- silently reloading out from under
+   someone mid-edit (Enable Editing -> unsaved changes) would lose their
+   work. Instead show a small dismissible banner and let them refresh
+   when it's convenient. */
+function showUpdateBanner() {
+  if (document.getElementById('swUpdateBanner')) return;
+  var bar = document.createElement('div');
+  bar.id = 'swUpdateBanner';
+  bar.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:100000;'
+    + 'background:#1f2937;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.25);'
+    + 'display:flex;align-items:center;gap:12px;font-size:0.85rem;';
+  bar.innerHTML = '<span>A new version is available.</span>';
+  var btn = document.createElement('button');
+  btn.textContent = 'Refresh';
+  btn.style.cssText = 'background:#2c5f82;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600;';
+  btn.onclick = function() { window.location.reload(); };
+  bar.appendChild(btn);
+  document.body.appendChild(bar);
+}
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
-    navigator.serviceWorker.register('/sw.js').catch(function(e) {
+    navigator.serviceWorker.register('/sw.js').then(function(reg) {
+      reg.addEventListener('updatefound', function() {
+        var newWorker = reg.installing;
+        if (!newWorker) return;
+        newWorker.addEventListener('statechange', function() {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            showUpdateBanner();
+          }
+        });
+      });
+    }).catch(function(e) {
       console.warn('Service worker registration failed', e);
     });
   });
@@ -1112,7 +1153,7 @@ window.addEventListener('load', function() {
   }, 300);
 });
 
-function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
+function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) {
   var table = document.getElementById(tableId);
   if (!table) return;
   var editMode = false;
@@ -1120,6 +1161,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
   var editBtn = document.getElementById(editBtnId);
   var saveBtn = document.getElementById(saveBtnId);
   var cancelBtn = document.getElementById(cancelBtnId);
+  var addRowBtn = addRowConfig ? document.getElementById(addRowConfig.btnId) : null;
 
   function toggle() {
     editMode = !editMode;
@@ -1127,6 +1169,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
     editBtn.classList.toggle('active', editMode);
     saveBtn.style.display = editMode ? 'inline-block' : 'none';
     cancelBtn.style.display = editMode ? 'inline-block' : 'none';
+    if (addRowBtn) addRowBtn.style.display = editMode ? 'inline-block' : 'none';
     table.classList.toggle('edit-mode', editMode);
 
     if (editMode) {
@@ -1143,6 +1186,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
         });
       });
     } else {
+      table.querySelectorAll('tr[data-new-row="true"]').forEach(function(tr) { tr.remove(); });
       var inputs = table.querySelectorAll('td.editable-cell input');
       inputs.forEach(function(inp) {
         revertEditableCellToText(inp.parentNode, inp);
@@ -1160,10 +1204,11 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
     var pending = [];
     var inputs = table.querySelectorAll('td.editable-cell input');
     inputs.forEach(function(inp) {
+      var tr = inp.closest('tr');
+      if (tr.getAttribute('data-new-row') === 'true') return;
       var original = inp.getAttribute('data-original');
       if (inp.value !== original) {
         var td = inp.parentNode;
-        var tr = td.parentNode;
         pending.push({
           source_file: tr.getAttribute('data-source'),
           sheet: tr.getAttribute('data-sheet'),
@@ -1174,16 +1219,33 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
         });
       }
     });
+    var newRows = addRowConfig ? collectNewRows(table) : [];
 
-    if (pending.length === 0) {
+    var total = pending.length + newRows.length;
+    if (total === 0) {
       showToast('No changes to save', 'success');
       editMode = true;
       toggle();
       return;
     }
 
-    var saved = 0, errors = [];
-    pending.forEach(function(item, idx) {
+    var saved = 0, errors = [], settled = 0;
+    function checkDone() {
+      settled++;
+      if (settled < total) return;
+      setTimeout(function() {
+        if (errors.length === 0) {
+          showToast('Saved ' + saved + ' change(s) successfully!', 'success');
+          window.location.reload();
+        } else {
+          showToast('Saved ' + saved + '/' + total + '. Errors: ' + errors.join('; '), 'error');
+          editMode = true;
+          toggle();
+        }
+      }, 500);
+    }
+
+    pending.forEach(function(item) {
       fetch('/api/save', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1206,26 +1268,26 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId) {
       .catch(function(e) {
         errors.push(item.column + ': ' + e.message);
       })
-      .finally(function() {
-        if (idx === pending.length - 1) {
-          setTimeout(function() {
-            if (errors.length === 0) {
-              showToast('Saved ' + saved + ' change(s) successfully!', 'success');
-              window.location.reload();
-            } else {
-              showToast('Saved ' + saved + '/' + pending.length + '. Errors: ' + errors.join('; '), 'error');
-              editMode = true;
-              toggle();
-            }
-          }, 500);
-        }
-      });
+      .finally(checkDone);
+    });
+
+    newRows.forEach(function(item) {
+      postNewRow(addRowConfig.dbTable, Object.assign({}, item.values, addRowConfig.fixedValues || {}))
+        .then(function(result) {
+          if (result.success) saved++;
+          else errors.push('New row: ' + (result.error || 'unknown'));
+        })
+        .catch(function(e) { errors.push('New row: ' + e.message); })
+        .finally(checkDone);
     });
   }
 
   editBtn.onclick = toggle;
   saveBtn.onclick = save;
   cancelBtn.onclick = cancel;
+  if (addRowBtn) {
+    addRowBtn.onclick = function() { addBlankRow(table, addRowConfig.columns); };
+  }
 }
 
 function escapeHtml(text) {
@@ -1270,6 +1332,76 @@ function buildEditableCellInput(cell) {
 }
 function revertEditableCellToText(td, inp) {
   td.textContent = inp.type === 'date' ? isoToDdmmyyyy(inp.value) : inp.value;
+}
+
+/* ---------- Add Row (insert new data, not just edit existing) --------
+   A blank <tr data-new-row="true"> is inserted at the top of a table's
+   tbody, using the exact same buildEditableCellInput() every existing
+   edit-mode cell already uses (built against an empty <td>, so it comes
+   back with an empty value/data-original -- date columns still get the
+   native picker, Percentage still gets a clamped number input, etc).
+   New rows are collected separately from the regular changed-cell scan
+   in save() and posted to /api/add_row instead of /api/save, since they
+   have no row id yet for /api/save's UPDATE ... WHERE id = %s to target. */
+function addBlankRow(table, columns) {
+  // Each entry in `columns` is either a plain column-name string (a real
+  // input cell) or {col, derived: true, placeholder} for a column that's
+  // computed/merged in existing rows (e.g. tab_3's Progress/Status
+  // Progress/Overall Progress Task (%)) -- those get a plain placeholder
+  // cell instead of an input, purely to keep the new row's cell count
+  // matching the table's real header, and are never sent to /api/add_row
+  // since collectNewRows() only reads .editable-cell inputs.
+  var tbody = table.tBodies[0] || table.querySelector('tbody');
+  if (!tbody) return;
+  var tr = document.createElement('tr');
+  tr.setAttribute('data-new-row', 'true');
+  var removeBtnPlaced = false;
+  columns.forEach(function(spec) {
+    var col = typeof spec === 'string' ? spec : spec.col;
+    var derived = typeof spec === 'object' && spec.derived;
+    var td = document.createElement('td');
+    td.setAttribute('data-col', col);
+    if (derived) {
+      td.className = 'derived-cell';
+      td.textContent = spec.placeholder || '';
+    } else {
+      td.className = 'editable-cell';
+      td.innerHTML = buildEditableCellInput(td);
+    }
+    if (!removeBtnPlaced) {
+      removeBtnPlaced = true;
+      var removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.textContent = '×';
+      removeBtn.title = 'Remove this new row';
+      removeBtn.className = 'btn-remove-row';
+      removeBtn.onclick = function() { tr.remove(); };
+      td.insertBefore(removeBtn, td.firstChild);
+    }
+    tr.appendChild(td);
+  });
+  tbody.insertBefore(tr, tbody.firstChild);
+}
+function collectNewRows(scopeEl) {
+  var rows = [];
+  scopeEl.querySelectorAll('tr[data-new-row="true"]').forEach(function(tr) {
+    var values = {}, hasAny = false;
+    tr.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+      var col = inp.closest('td').getAttribute('data-col');
+      var v = inp.value.trim();
+      if (v !== '') hasAny = true;
+      values[col] = v;
+    });
+    if (hasAny) rows.push({tr: tr, values: values});
+  });
+  return rows;
+}
+function postNewRow(dbTable, values) {
+  return fetch('/api/add_row', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({table: dbTable, values: values})
+  }).then(function(r) { return r.json(); });
 }
 
 /* ---------- Percentage -> Status Progress / Overall Progress live sync
@@ -1341,8 +1473,9 @@ function showToast(msg, type) {
   setTimeout(function() { toast.style.display = 'none'; }, 3000);
 }
 
-function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId) {
+function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId, addRowConfig) {
   var editMode = false;
+  var addRowBtn = addRowConfig ? document.getElementById(addRowConfig.btnId) : null;
 
   function getTables() {
     return document.querySelectorAll('#' + tabId + ' .' + tableClass);
@@ -1355,6 +1488,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
     btn.classList.toggle('active', editMode);
     document.getElementById(saveBtnId).style.display = editMode ? 'inline-block' : 'none';
     document.getElementById(cancelBtnId).style.display = editMode ? 'inline-block' : 'none';
+    if (addRowBtn) addRowBtn.style.display = editMode ? 'inline-block' : 'none';
 
     getTables().forEach(function(t) {
       t.classList.toggle('edit-mode', editMode);
@@ -1377,16 +1511,21 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
         });
       }
     });
-    if (!editMode) applyEndDateBadges();
+    if (!editMode) {
+      document.querySelectorAll('#' + tabId + ' tr[data-new-row="true"]').forEach(function(tr) { tr.remove(); });
+      applyEndDateBadges();
+    }
   }
 
   function save() {
     var pending = [];
     getTables().forEach(function(t) {
       t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+        var tr = inp.closest('tr');
+        if (tr.getAttribute('data-new-row') === 'true') return;
         var original = inp.getAttribute('data-original');
         if (inp.value !== original) {
-          var td = inp.parentNode, tr = td.parentNode;
+          var td = inp.parentNode;
           pending.push({
             source_file: tr.getAttribute('data-source'),
             sheet: tr.getAttribute('data-sheet'),
@@ -1410,15 +1549,37 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
         }
       });
     });
+    var newRows = addRowConfig
+      ? collectNewRows(document.getElementById(tabId))
+      : [];
 
-    if (pending.length === 0) {
+    var total = pending.length + newRows.length;
+    if (total === 0) {
       showToast('No changes to save', 'success');
       toggle();
       return;
     }
 
-    var saved = 0, errors = [];
-    pending.forEach(function(item, idx) {
+    var saved = 0, errors = [], settled = 0;
+    function checkDone() {
+      settled++;
+      if (settled < total) return;
+      setTimeout(function() {
+        if (errors.length === 0) {
+          // Reload so any values the backend recomputes from what was just
+          // saved (Overall Progress Task (%), Status Progress vs. Percentage,
+          // chart/metric counts, etc.) come back fresh instead of only
+          // showing the client-side preview.
+          showToast('Saved ' + saved + ' change(s) successfully!', 'success');
+          window.location.reload();
+        } else {
+          showToast('Saved ' + saved + '/' + total + '. Errors: ' + errors.join('; '), 'error');
+          toggle();
+        }
+      }, 500);
+    }
+
+    pending.forEach(function(item) {
       fetch('/api/save', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1430,23 +1591,17 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
         else errors.push(item.column + ': ' + (result.error || 'unknown'));
       })
       .catch(function(e) { errors.push(item.column + ': ' + e.message); })
-      .finally(function() {
-        if (idx === pending.length - 1) {
-          setTimeout(function() {
-            if (errors.length === 0) {
-              // Reload so any values the backend recomputes from what was
-              // just saved (Overall Progress Task (%), Status Progress vs.
-              // Percentage, chart/metric counts, etc.) come back fresh
-              // instead of only showing the client-side preview.
-              showToast('Saved ' + saved + ' change(s) successfully!', 'success');
-              window.location.reload();
-            } else {
-              showToast('Saved ' + saved + '/' + pending.length + '. Errors: ' + errors.join('; '), 'error');
-              toggle();
-            }
-          }, 500);
-        }
-      });
+      .finally(checkDone);
+    });
+
+    newRows.forEach(function(item) {
+      postNewRow(addRowConfig.dbTable, Object.assign({}, item.values, addRowConfig.fixedValues || {}))
+        .then(function(result) {
+          if (result.success) saved++;
+          else errors.push('New row: ' + (result.error || 'unknown'));
+        })
+        .catch(function(e) { errors.push('New row: ' + e.message); })
+        .finally(checkDone);
     });
   }
 
@@ -1457,11 +1612,37 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId)
   document.getElementById(editBtnId).onclick = toggle;
   document.getElementById(saveBtnId).onclick = save;
   document.getElementById(cancelBtnId).onclick = cancel;
+  if (addRowBtn) {
+    addRowBtn.onclick = function() {
+      var target = addRowConfig.targetTableId
+        ? document.getElementById(addRowConfig.targetTableId)
+        : getTables()[0];
+      if (target) addBlankRow(target, addRowConfig.columns);
+    };
+  }
 }
 
 var editTables = [
-  ['warranty-table', 'saveBtn2', 'cancelBtn2', 'editBtn2'],
-  ['project-table', 'saveBtn3', 'cancelBtn3', 'editBtn3'],
+  ['warranty-table', 'saveBtn2', 'cancelBtn2', 'editBtn2', {
+    btnId: 'addRowBtn2', dbTable: 'tickets',
+    columns: ['Ticket No', 'Task Type', 'Project', 'Company', 'Ticket Title', 'Priority', 'Ticket Status', 'Ticket Created Date', 'Days'],
+    fixedValues: {'Client': 'Client Warranty'}
+  }],
+  ['project-table', 'saveBtn3', 'cancelBtn3', 'editBtn3', {
+    btnId: 'addRowBtn3', dbTable: 'projects',
+    // Order/count must match tab_3.html's <thead> exactly (display_cols_p
+    // in api/index.py) -- Progress/Status Progress/Overall Progress Task (%)
+    // are derived placeholders here (not sent to /api/add_row) purely to
+    // keep the new row's cells aligned under the right header columns.
+    columns: [
+      'Client', 'Title', 'Description', 'Category',
+      {col: 'Progress', derived: true, placeholder: 'Not Started'},
+      'Priority', 'Start date', 'Due date', 'Target Date', 'Duration', 'Assigned to',
+      {col: 'Status Progress', derived: true, placeholder: 'Not Started'},
+      'Percentage',
+      {col: 'Overall Progress Task (%)', derived: true, placeholder: ''}
+    ]
+  }],
   ['client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9']
 ];
 
@@ -1474,16 +1655,22 @@ var editTables = [
 function wireEditTables() {
   editTables.forEach(function(args) {
     if (document.getElementById(args[0])) {
-      makeEditable(args[0], args[1], args[2], args[3]);
+      makeEditable(args[0], args[1], args[2], args[3], args[4]);
     }
   });
 
   if (document.getElementById('editBtn9')) {
-    makeEditableMulti('client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9', 'tab-9');
+    makeEditableMulti('client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9', 'tab-9', {
+      btnId: 'addRowBtn9', dbTable: 'clients',
+      columns: ['Client', 'Projek ID', 'Projek Name', 'Projek Status', 'Start Date', 'End Date']
+    });
   }
 
-  if (document.querySelector('.detail-table')) {
-    makeEditableMulti('detail-table', 'saveBtn', 'cancelBtn', 'editBtn', 'tab-7');
+  if (document.querySelector('.detail-table') || document.getElementById('add-ticket-table')) {
+    makeEditableMulti('detail-table', 'saveBtn', 'cancelBtn', 'editBtn', 'tab-7', {
+      btnId: 'addTicketBtn', dbTable: 'tickets', targetTableId: 'add-ticket-table',
+      columns: ['Client', 'Ticket No', 'Task Type', 'Project', 'Company', 'Ticket Title', 'Ticket Detail', 'Ticket Category', 'Priority', 'Ticket Status', 'Ticket Created Date', 'Ticket Completed Date', 'Ticket Closed Date', 'SLA Dateline']
+    });
   }
 }
 wireEditTables();
