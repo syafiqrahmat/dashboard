@@ -50,6 +50,7 @@ TICKET_DB_COLUMNS = [
 PROJECT_DB_COLUMNS = [
     ("Client", "client"),
     ("Title", "title"),
+    ("Projek Name", "projek_name"),
     ("Description", "description"),
     ("Category", "category"),
     ("Progress", "progress"),
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS projects (
     id SERIAL PRIMARY KEY,
     client TEXT,
     title TEXT,
+    projek_name TEXT,
     description TEXT,
     category TEXT,
     progress TEXT,
@@ -130,6 +132,7 @@ CREATE TABLE IF NOT EXISTS projects (
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS duration TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS dedup_seq INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS projek_name TEXT;
 
 CREATE TABLE IF NOT EXISTS clients (
     id SERIAL PRIMARY KEY,

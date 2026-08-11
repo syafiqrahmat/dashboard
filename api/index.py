@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -155,12 +156,40 @@ def parse_filters(args):
                 filters[key] = raw
             except ValueError:
                 pass
+    filters["projek_name"] = args.get("projek_name") or None
     return filters
+
+
+def _narrow_by_projek_name(df, filters):
+    """Best-effort narrowing of tickets down to the specific Projek Name
+    clicked in Overall Client (e.g. "MYOT MARA" vs "MYCLAIM MARA" under the
+    same client) via the tickets' own Project column. Real data shows this
+    only lines up for some clients (Project holds a short code like
+    "MYCLAIM" that's a substring of the Projek Name once the client's own
+    name is stripped off) and not others (e.g. a Projek Name that doesn't
+    even share a client-name convention with its tickets) -- so on no
+    match this deliberately falls back to the unnarrowed df rather than
+    showing an empty page for a client whose data just doesn't follow the
+    pattern.
+    """
+    projek_name = (filters or {}).get("projek_name")
+    if not projek_name or df.empty or "Project" not in df.columns:
+        return df
+    core = projek_name
+    clients = (filters or {}).get("clients") or []
+    if len(clients) == 1:
+        client = re.escape(clients[0])
+        core = re.sub(rf"(^\s*{client}\s+|\s+{client}\s*$)", "", projek_name, flags=re.IGNORECASE).strip()
+    if not core:
+        return df
+    narrowed = df[df["Project"].astype(str).str.contains(re.escape(core), case=False, na=False)]
+    return narrowed if not narrowed.empty else df
 
 
 def load_data(filters=None):
     ensure_schema()
     df = db.fetch_tickets_df(filters, conn=request_conn())
+    df = _narrow_by_projek_name(df, filters)
     return df, []
 
 
@@ -362,7 +391,7 @@ def build_project_charts(df):
                     timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})}</div>'
             charts["timeline_chart"] = timeline_charts_html
 
-    display_cols_p = ["Client", "Title", "Description", "Category", "Progress", "Priority", "Start date", "Due date", "Target Date", "Duration", "Assigned to", "Status Progress", "Percentage", "Overall Progress Task (%)"]
+    display_cols_p = ["Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority", "Start date", "Due date", "Target Date", "Duration", "Assigned to", "Status Progress", "Percentage", "Overall Progress Task (%)"]
     avail_p = [c for c in display_cols_p if c in df.columns]
     meta_p = [c for c in ["_row_idx", "_source_file"] if c in df.columns]
     detail = df[avail_p + meta_p].copy()
@@ -858,6 +887,7 @@ def build_filter_options(filters):
     filter_options["selected_priorities"] = filters["priorities"]
     filter_options["selected_statuses"] = filters["statuses"]
     filter_options["selected_task_types"] = filters["task_types"]
+    filter_options["projek_name"] = filters.get("projek_name") or ""
     return filter_options
 
 
@@ -922,6 +952,15 @@ def build_tab_context(idx, filters, filter_options, df=None):
         # to that client.
         if filters["clients"] and "Client" in project_df.columns:
             project_df = project_df[project_df["Client"].isin(filters["clients"])]
+        # Unlike tickets (no real Projek Name field, only a best-effort
+        # guess against Project), projects rows carry Projek Name directly,
+        # so this is an exact match -- still falls back to the unnarrowed
+        # set if it matches nothing, same safety rule as the ticket side.
+        projek_name = filters.get("projek_name")
+        if projek_name and "Projek Name" in project_df.columns and not project_df.empty:
+            narrowed = project_df[project_df["Projek Name"] == projek_name]
+            if not narrowed.empty:
+                project_df = narrowed
         project_df = recompute_status_from_percentage(project_df)
         project_df = recompute_overall_progress(project_df)
         has_project = not project_df.empty

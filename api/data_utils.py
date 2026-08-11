@@ -34,6 +34,8 @@ COLUMN_MAPPING = {
     "task type": "Task Type",
     "task_type": "Task Type",
     "project": "Project",
+    "projek name": "Project",
+    "projek_name": "Project",
     "company": "Company",
     "ticket title": "Ticket Title",
     "ticket_title": "Ticket Title",
@@ -83,7 +85,7 @@ TICKET_COLUMNS = [
 ]
 
 PROJECT_COLUMNS = [
-    "Client", "Title", "Description", "Category", "Progress", "Priority",
+    "Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority",
     "Start date", "Due date", "Target Date", "Duration", "Assigned to",
     "Status Progress", "Percentage", "Overall Progress Task (%)", "Source File",
     "Dedup Seq",
@@ -279,6 +281,13 @@ def parse_project_sheet(df, source_file):
     disappearing.
     """
     df = df.dropna(how="all").copy()
+    # parse_project_sheet doesn't go through standardize_columns (unlike
+    # ticket/client sheets) since its column set is fixed/positional, but
+    # "Projek Name" is a late addition some source sheets may not spell
+    # exactly right -- normalize any casing/underscore variant.
+    rename_map = {c: "Projek Name" for c in df.columns if str(c).strip().lower() in ("projek name", "projek_name")}
+    if rename_map:
+        df = df.rename(columns=rename_map)
     if "Client" in df.columns:
         df["Client"] = df["Client"].ffill()
     df["Source File"] = source_file
@@ -316,7 +325,7 @@ def parse_project_sheet(df, source_file):
     # already blank, so a row with its own genuine value (e.g. every
     # numbered task already has its own date range) is left untouched.
     block_cols = [c for c in [
-        "Category", "Progress", "Priority", "Start date", "Due date", "Tempoh",
+        "Projek Name", "Category", "Progress", "Priority", "Start date", "Due date", "Tempoh",
         "Target Date", "Assigned to", "Status Progress", "Percentage",
         "Overall Progress Task (%)",
     ] if c in df.columns]
