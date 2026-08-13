@@ -458,18 +458,36 @@ def build_project_charts(df):
                     ranged = cdf[cdf["Start date"] != cdf["Due date"]]
                     milestones = cdf[cdf["Start date"] == cdf["Due date"]]
 
+                    # A real (non-milestone) 1-2 day bar does have an actual
+                    # duration, so it's fair to give it a minimum visible
+                    # length on the date axis, scaled to this client's own
+                    # chart span the same way the old milestone-stretch did
+                    # -- unlike a true 0-day milestone, this doesn't invent
+                    # a date range that never existed, it just guarantees a
+                    # short-but-real one doesn't round down to invisible.
+                    span_days = max((cdf["Due date"].max() - cdf["Start date"].min()).days, 1)
+                    min_bar_ms = max(1, round(span_days * 0.015)) * 86400000
+
                     fig = go.Figure()
                     for val in color_values:
                         rdf = ranged[ranged[color_col].astype(str) == val]
                         if not rdf.empty:
+                            bar_days = (rdf["Due date"] - rdf["Start date"]).dt.days
+                            # Thicker vertically (row height) AND given a
+                            # visible minimum horizontal length -- short
+                            # tasks need to stand out in both directions,
+                            # not just one.
+                            bar_widths = bar_days.apply(lambda d: 0.9 if d <= 2 else 0.7)
+                            bar_ms = (rdf["Due date"] - rdf["Start date"]).dt.total_seconds() * 1000
+                            bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
                             fig.add_trace(go.Bar(
                                 base=rdf["Start date"],
                                 # A raw pandas Timedelta isn't JSON-serializable
                                 # in every Plotly version -- milliseconds (a
                                 # plain float) is how Plotly represents a bar's
                                 # width on a date axis internally either way.
-                                x=(rdf["Due date"] - rdf["Start date"]).dt.total_seconds() * 1000,
-                                y=rdf["Y Pos"], orientation="h", width=0.6,
+                                x=bar_ms,
+                                y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
                                 name=val, legendgroup=val, marker_color=color_map[val],
                                 customdata=rdf[["Row Label", "Start date", "Due date"]].astype(str),
                                 hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
@@ -478,7 +496,7 @@ def build_project_charts(df):
                         if not mdf.empty:
                             fig.add_trace(go.Scatter(
                                 x=mdf["Start date"], y=mdf["Y Pos"], mode="markers",
-                                marker=dict(symbol="diamond", size=12, color=color_map[val], line=dict(width=1, color="#374151")),
+                                marker=dict(symbol="diamond", size=22, color=color_map[val], line=dict(width=1.5, color="#374151")),
                                 name=val, legendgroup=val, showlegend=rdf.empty,
                                 customdata=mdf[["Row Label", "Start date"]].astype(str),
                                 hovertemplate="Row=%{customdata[0]}<br>Date=%{customdata[1]}<extra></extra>",
@@ -487,11 +505,13 @@ def build_project_charts(df):
                     # tickvals/ticktext (not a categorical axis) is what
                     # lets the same description repeat as text on two
                     # different rows without Plotly merging them back down
-                    # to one category. margin (row spacing) comes from bar
-                    # width=0.6 above, leaving 40% of each row's slot empty.
+                    # to one category. margin (row spacing) comes from the
+                    # bar width values above (0.7/0.9), leaving 10-30% of
+                    # each row's slot empty.
                     fig.update_yaxes(
                         autorange="reversed", title=None,
                         tickmode="array", tickvals=cdf["Y Pos"], ticktext=cdf["Task Label"],
+                        tickfont=dict(size=14),
                     )
                     fig.update_xaxes(title="Tarikh", type="date")
                     fig.update_layout(
@@ -501,8 +521,9 @@ def build_project_charts(df):
                         # hovering shows the full project+task+dates, so
                         # the color-key legend is redundant screen space.
                         showlegend=False,
-                        height=max(220, 42*len(cdf)),
-                        margin=dict(l=140),
+                        height=max(480, 95*len(cdf)),
+                        margin=dict(l=180),
+                        font_size=15,
                     )
                     timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False, "responsive": True})}</div>'
             charts["timeline_chart"] = timeline_charts_html
