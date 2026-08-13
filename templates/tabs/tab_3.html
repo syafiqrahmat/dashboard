@@ -47,7 +47,7 @@
               {% if row.get('_op_rowspan', 1) > 0 %}
               <td class="op-merged-cell" id="op-cell-{{ ns_op.group }}" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
               {% endif %}
-            {% elif key in ('Progress', 'Status Progress') %}
+            {% elif key in ('Progress', 'Status Progress', 'Duration') %}
             <td class="derived-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
             {% elif key not in skip_cols_3 %}
             <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>

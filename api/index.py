@@ -324,6 +324,30 @@ def recompute_status_from_percentage(df):
     return df
 
 
+def recompute_duration(df):
+    """Duration is derived, not typed -- Start date through Due date,
+    inclusive of both ends, with Saturdays not counted (so a 7-day
+    calendar week is 6 days of duration). Recomputed on every load so
+    editing either date always keeps Duration in sync, the same way
+    Status Progress stays in sync with Percentage.
+    """
+    if df.empty or not {"Start date", "Due date"}.issubset(df.columns):
+        return df
+
+    df = df.copy()
+
+    def duration_for(row):
+        start, end = row["Start date"], row["Due date"]
+        if pd.isna(start) or pd.isna(end) or end < start:
+            return None
+        days = (end - start).days + 1
+        saturdays = sum(1 for i in range(days) if (start + pd.Timedelta(days=i)).weekday() == 5)
+        return f"{days - saturdays} days"
+
+    df["Duration"] = df.apply(duration_for, axis=1)
+    return df
+
+
 def build_project_charts(df):
     charts = {}
     if df.empty:
@@ -368,27 +392,119 @@ def build_project_charts(df):
             valid["Task Label"] = valid["Task Label"].str.split("\n").str[0].str.strip()
         else:
             valid["Task Label"] = valid["Title"].astype(str)
+        # A client can have more than one project (e.g. MYCLAIM MARA and
+        # MYOT MARA both under MARA), and both commonly reuse the exact
+        # same task names (Development/UAT/Go Live/...). Row identity by
+        # Task Label alone collapsed those onto the same y-axis row, so
+        # whichever bar happened to overlap in time visually covered the
+        # other one up entirely -- e.g. MyOT's "Go Live" bar hid MyClaim's
+        # own Development/UAT/Go Live bars underneath it. Scope each row to
+        # its own project (Projek Name, falling back to Title) plus task
+        # name so same-named tasks from different projects always get
+        # their own row and are never drawn on top of each other.
+        project_key = valid["Projek Name"].where(valid["Projek Name"].astype(str).str.strip().ne(""), valid["Title"]) if "Projek Name" in valid.columns else valid["Title"]
+        valid["Row Label"] = project_key.astype(str) + ": " + valid["Task Label"]
         if not valid.empty:
             timeline_charts_html = ""
             if "Client" in valid.columns:
                 for client in sorted(valid["Client"].dropna().unique()):
-                    cdf = valid[valid["Client"] == client]
+                    cdf = valid[valid["Client"] == client].copy()
                     if cdf.empty:
                         continue
-                    fig = px.timeline(
-                        cdf, x_start="Start date", x_end="Due date",
-                        y="Task Label", color="Client",
-                        title=f"{client} - PROJECT DEVELOPMENT TIMELINE",
-                        color_discrete_sequence=px.colors.qualitative.Plotly,
+                    # Row Label (Project: Task) usually gives each task its
+                    # own row, but a project can legitimately have two rows
+                    # with the exact same description (a generic recurring
+                    # checklist item like "Sign-off", or two "UAT" rounds) --
+                    # a *shared string* y-axis category collapses those onto
+                    # one line no matter how the string is built. Give every
+                    # row its own guaranteed-unique numeric position instead
+                    # (one row of cdf = one position, always, by
+                    # construction) and only use Row Label as the tick text
+                    # shown at that position -- so two rows with identical
+                    # text still each get their own line.
+                    #
+                    # Preserve cdf's incoming order rather than re-sorting
+                    # it (previously by Row Label/Start date) so the chart's
+                    # row order matches the Project Details table's row
+                    # order -- both ultimately come from the same
+                    # project_df, fetched `ORDER BY id`, so as long as
+                    # neither re-sorts they stay in the same sequence.
+                    cdf = cdf.reset_index(drop=True)
+                    cdf["Y Pos"] = cdf.index
+                    # Coloring by Client here was a no-op -- every row in
+                    # cdf already shares the same Client, so every bar came
+                    # out one uniform color. Color by Category instead so
+                    # different kinds of work are visually distinguishable;
+                    # but if this client's tasks are all the same Category
+                    # too (equally uniform, equally uninformative), color
+                    # by the task itself (Task Label, from Description) so
+                    # each bar in the timeline still reads as distinct.
+                    categories = cdf["Category"].dropna().unique() if "Category" in cdf.columns else []
+                    color_col = "Category" if len(categories) > 1 else "Task Label"
+                    color_values = sorted(cdf[color_col].dropna().astype(str).unique().tolist())
+                    palette = px.colors.qualitative.Plotly
+                    color_map = {val: palette[i % len(palette)] for i, val in enumerate(color_values)}
+
+                    # A single-day milestone (Start date == Due date, e.g.
+                    # "Go Live") has zero width as a bar -- stretching its
+                    # end date to make it visible (an earlier attempt) drew
+                    # it as if it actually spanned days or weeks it never
+                    # did, which is just wrong, not merely a cosmetic
+                    # compromise. Real Gantt tools handle this by drawing
+                    # milestones as fixed-size marker points instead of
+                    # bars: a marker's size is in pixels, not date units,
+                    # so it's visible at any chart scale without touching
+                    # the real date it's plotted at.
+                    ranged = cdf[cdf["Start date"] != cdf["Due date"]]
+                    milestones = cdf[cdf["Start date"] == cdf["Due date"]]
+
+                    fig = go.Figure()
+                    for val in color_values:
+                        rdf = ranged[ranged[color_col].astype(str) == val]
+                        if not rdf.empty:
+                            fig.add_trace(go.Bar(
+                                base=rdf["Start date"],
+                                # A raw pandas Timedelta isn't JSON-serializable
+                                # in every Plotly version -- milliseconds (a
+                                # plain float) is how Plotly represents a bar's
+                                # width on a date axis internally either way.
+                                x=(rdf["Due date"] - rdf["Start date"]).dt.total_seconds() * 1000,
+                                y=rdf["Y Pos"], orientation="h", width=0.6,
+                                name=val, legendgroup=val, marker_color=color_map[val],
+                                customdata=rdf[["Row Label", "Start date", "Due date"]].astype(str),
+                                hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
+                            ))
+                        mdf = milestones[milestones[color_col].astype(str) == val]
+                        if not mdf.empty:
+                            fig.add_trace(go.Scatter(
+                                x=mdf["Start date"], y=mdf["Y Pos"], mode="markers",
+                                marker=dict(symbol="diamond", size=12, color=color_map[val], line=dict(width=1, color="#374151")),
+                                name=val, legendgroup=val, showlegend=rdf.empty,
+                                customdata=mdf[["Row Label", "Start date"]].astype(str),
+                                hovertemplate="Row=%{customdata[0]}<br>Date=%{customdata[1]}<extra></extra>",
+                            ))
+
+                    # tickvals/ticktext (not a categorical axis) is what
+                    # lets the same description repeat as text on two
+                    # different rows without Plotly merging them back down
+                    # to one category. margin (row spacing) comes from bar
+                    # width=0.6 above, leaving 40% of each row's slot empty.
+                    fig.update_yaxes(
+                        autorange="reversed", title=None,
+                        tickmode="array", tickvals=cdf["Y Pos"], ticktext=cdf["Task Label"],
                     )
-                    fig.update_yaxes(autorange="reversed", title=None)
-                    fig.update_xaxes(title="Tarikh")
+                    fig.update_xaxes(title="Tarikh", type="date")
                     fig.update_layout(
                         template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="#374151"), showlegend=False,
-                        height=max(200, 30*len(cdf)),
+                        font=dict(color="#374151"), title=f"{client} - PROJECT DEVELOPMENT TIMELINE",
+                        # Y-axis already shows the plain task name and
+                        # hovering shows the full project+task+dates, so
+                        # the color-key legend is redundant screen space.
+                        showlegend=False,
+                        height=max(220, 42*len(cdf)),
+                        margin=dict(l=140),
                     )
-                    timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})}</div>'
+                    timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False, "responsive": True})}</div>'
             charts["timeline_chart"] = timeline_charts_html
 
     display_cols_p = ["Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority", "Start date", "Due date", "Target Date", "Duration", "Assigned to", "Status Progress", "Percentage", "Overall Progress Task (%)"]
@@ -963,6 +1079,7 @@ def build_tab_context(idx, filters, filter_options, df=None):
                 project_df = narrowed
         project_df = recompute_status_from_percentage(project_df)
         project_df = recompute_overall_progress(project_df)
+        project_df = recompute_duration(project_df)
         has_project = not project_df.empty
         project_charts = build_project_charts(project_df) if has_project else {}
         return "tabs/tab_3.html", {**common, "has_project": has_project, "project_charts": project_charts}

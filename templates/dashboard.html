@@ -1017,7 +1017,7 @@ function toggleSidebar() {
   });
 })();
 /* ---------- End Date corner banner (Overall Client tab) ----------
-   Flags rows whose End Date is within the next 7 days (yellow "Due Soon")
+   Flags rows whose End Date is within the next month (yellow "Due Soon")
    or already in the past (red "Overdue"). Runs after render since the
    dates are baked into the table as plain dd/mm/yyyy text server-side. */
 function applyEndDateBadges() {
@@ -1025,7 +1025,7 @@ function applyEndDateBadges() {
   if (!cells.length) return;
   var today = new Date();
   today.setHours(0, 0, 0, 0);
-  var SOON_DAYS = 7;
+  var SOON_DAYS = 30;
   cells.forEach(function(cell) {
     var existing = cell.querySelector('.end-date-badge');
     if (existing) existing.remove();
@@ -1636,13 +1636,16 @@ var editTables = [
   ['project-table', 'saveBtn3', 'cancelBtn3', 'editBtn3', {
     btnId: 'addRowBtn3', dbTable: 'projects',
     // Order/count must match tab_3.html's <thead> exactly (display_cols_p
-    // in api/index.py) -- Progress/Status Progress/Overall Progress Task (%)
-    // are derived placeholders here (not sent to /api/add_row) purely to
-    // keep the new row's cells aligned under the right header columns.
+    // in api/index.py) -- Progress/Status Progress/Duration/Overall
+    // Progress Task (%) are derived placeholders here (not sent to
+    // /api/add_row) purely to keep the new row's cells aligned under the
+    // right header columns.
     columns: [
       'Client', 'Title', 'Projek Name', 'Description', 'Category',
       {col: 'Progress', derived: true, placeholder: 'Not Started'},
-      'Priority', 'Start date', 'Due date', 'Target Date', 'Duration', 'Assigned to',
+      'Priority', 'Start date', 'Due date', 'Target Date',
+      {col: 'Duration', derived: true, placeholder: ''},
+      'Assigned to',
       {col: 'Status Progress', derived: true, placeholder: 'Not Started'},
       'Percentage',
       {col: 'Overall Progress Task (%)', derived: true, placeholder: ''}
