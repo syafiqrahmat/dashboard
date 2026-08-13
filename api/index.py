@@ -445,62 +445,64 @@ def build_project_charts(df):
                     palette = px.colors.qualitative.Plotly
                     color_map = {val: palette[i % len(palette)] for i, val in enumerate(color_values)}
 
-                    # A single-day milestone (Start date == Due date, e.g.
-                    # "Go Live") has zero width as a bar -- stretching its
-                    # end date to make it visible (an earlier attempt) drew
-                    # it as if it actually spanned days or weeks it never
-                    # did, which is just wrong, not merely a cosmetic
-                    # compromise. Real Gantt tools handle this by drawing
-                    # milestones as fixed-size marker points instead of
-                    # bars: a marker's size is in pixels, not date units,
-                    # so it's visible at any chart scale without touching
-                    # the real date it's plotted at.
-                    ranged = cdf[cdf["Start date"] != cdf["Due date"]]
-                    milestones = cdf[cdf["Start date"] == cdf["Due date"]]
+                    # A milestone (Start date == Due date, e.g. "Go Live")
+                    # and a real 1-day task (Due date = Start date + 1) are
+                    # both, in plain terms, "this happened on one day" --
+                    # they used to render completely differently (a diamond
+                    # marker vs. a bar), which is the inconsistency being
+                    # fixed here. Both now render as the exact same bar:
+                    # a milestone's Due date is treated as Start date + 1
+                    # day purely for the chart (real Due date/Duration
+                    # elsewhere untouched), so every ~1-day task gets
+                    # identical, standardized sizing regardless of which
+                    # way it happened to be recorded.
+                    chart_due = cdf["Due date"].where(cdf["Due date"] != cdf["Start date"], cdf["Start date"] + pd.Timedelta(days=1))
+                    cdf = cdf.assign(**{"Chart Due": chart_due})
 
-                    # A real (non-milestone) 1-2 day bar does have an actual
-                    # duration, so it's fair to give it a minimum visible
-                    # length on the date axis, scaled to this client's own
-                    # chart span the same way the old milestone-stretch did
-                    # -- unlike a true 0-day milestone, this doesn't invent
-                    # a date range that never existed, it just guarantees a
-                    # short-but-real one doesn't round down to invisible.
-                    span_days = max((cdf["Due date"].max() - cdf["Start date"].min()).days, 1)
-                    min_bar_ms = max(1, round(span_days * 0.015)) * 86400000
+                    # A short bar does have an actual duration, so it's
+                    # fair to give it a minimum visible length on the date
+                    # axis, scaled to this client's own chart span -- this
+                    # doesn't invent a date range that never existed, it
+                    # just guarantees a short-but-real one doesn't round
+                    # down to invisible. Capped at 2 days: uncapped, this
+                    # scaled with the *whole chart's* span (which can be
+                    # dominated by an unrelated multi-year task elsewhere
+                    # in the same client), so on a wide enough chart a
+                    # boosted 1-day task could stretch past a genuine,
+                    # unboosted 3-4 day task and visually look longer than
+                    # something that actually took more real time -- capping
+                    # at 2 days keeps it strictly below the >2-day tier that
+                    # never gets boosted, so relative ordering is never
+                    # inverted by the correction meant to just aid visibility.
+                    span_days = max((cdf["Chart Due"].max() - cdf["Start date"].min()).days, 1)
+                    min_bar_ms = min(max(1, round(span_days * 0.015)), 2) * 86400000
 
                     fig = go.Figure()
                     for val in color_values:
-                        rdf = ranged[ranged[color_col].astype(str) == val]
-                        if not rdf.empty:
-                            bar_days = (rdf["Due date"] - rdf["Start date"]).dt.days
-                            # Thicker vertically (row height) AND given a
-                            # visible minimum horizontal length -- short
-                            # tasks need to stand out in both directions,
-                            # not just one.
-                            bar_widths = bar_days.apply(lambda d: 0.9 if d <= 2 else 0.7)
-                            bar_ms = (rdf["Due date"] - rdf["Start date"]).dt.total_seconds() * 1000
-                            bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
-                            fig.add_trace(go.Bar(
-                                base=rdf["Start date"],
-                                # A raw pandas Timedelta isn't JSON-serializable
-                                # in every Plotly version -- milliseconds (a
-                                # plain float) is how Plotly represents a bar's
-                                # width on a date axis internally either way.
-                                x=bar_ms,
-                                y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
-                                name=val, legendgroup=val, marker_color=color_map[val],
-                                customdata=rdf[["Row Label", "Start date", "Due date"]].astype(str),
-                                hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
-                            ))
-                        mdf = milestones[milestones[color_col].astype(str) == val]
-                        if not mdf.empty:
-                            fig.add_trace(go.Scatter(
-                                x=mdf["Start date"], y=mdf["Y Pos"], mode="markers",
-                                marker=dict(symbol="diamond", size=22, color=color_map[val], line=dict(width=1.5, color="#374151")),
-                                name=val, legendgroup=val, showlegend=rdf.empty,
-                                customdata=mdf[["Row Label", "Start date"]].astype(str),
-                                hovertemplate="Row=%{customdata[0]}<br>Date=%{customdata[1]}<extra></extra>",
-                            ))
+                        rdf = cdf[cdf[color_col].astype(str) == val]
+                        if rdf.empty:
+                            continue
+                        bar_days = (rdf["Chart Due"] - rdf["Start date"]).dt.days
+                        # Thicker vertically (row height) AND given a
+                        # visible minimum horizontal length -- short tasks
+                        # need to stand out in both directions, not just
+                        # one, and every ~1-day task (bar_days <= 1) gets
+                        # the exact same standardized thickness/width.
+                        bar_widths = bar_days.apply(lambda d: 0.9 if d <= 1 else (0.85 if d <= 2 else 0.7))
+                        bar_ms = (rdf["Chart Due"] - rdf["Start date"]).dt.total_seconds() * 1000
+                        bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
+                        fig.add_trace(go.Bar(
+                            base=rdf["Start date"],
+                            # A raw pandas Timedelta isn't JSON-serializable
+                            # in every Plotly version -- milliseconds (a
+                            # plain float) is how Plotly represents a bar's
+                            # width on a date axis internally either way.
+                            x=bar_ms,
+                            y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
+                            name=val, legendgroup=val, marker_color=color_map[val],
+                            customdata=rdf[["Row Label", "Start date", "Due date"]].astype(str),
+                            hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
+                        ))
 
                     # tickvals/ticktext (not a categorical axis) is what
                     # lets the same description repeat as text on two
