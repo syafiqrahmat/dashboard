@@ -363,15 +363,44 @@ def build_project_charts(df):
         "in_progress": in_progress, "not_started": not_started,
     }
 
-    if "Client" in df.columns:
-        valid_clients = df.dropna(subset=["Client"])
-        if not valid_clients.empty:
-            cc = valid_clients["Client"].value_counts().reset_index()
-            cc.columns = ["Client", "Count"]
-            fig = px.bar(cc, x="Client", y="Count", title="Projects by Client",
-                          color="Client", text="Count")
-            fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False)
-            charts["client_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
+    # "Projects by Client" collapses to a single, useless one-bar chart
+    # whenever the sidebar has already scoped the page down to one client
+    # (the common case -- it's identical to "all projects" only when every
+    # client is being viewed at once). Show progress per module (Title)
+    # instead: that's informative both scoped to one client and across all
+    # of them, and doubles as an at-a-glance progress readout.
+    if "Title" in df.columns and "Overall Progress Task (%)" in df.columns:
+        module_df = df.dropna(subset=["Title"])
+        module_df = module_df[module_df["Title"].astype(str).str.strip() != ""]
+        if not module_df.empty:
+            group_cols = ["Client", "Title"] if "Client" in module_df.columns else ["Title"]
+            # keep="first" on the table's own row order (not a groupby,
+            # which would alphabetize) so the chart's bar order matches
+            # the Project Details table below it, exactly like the
+            # table's own row order is never re-sorted either.
+            modules = module_df.drop_duplicates(subset=group_cols, keep="first")[group_cols + ["Overall Progress Task (%)"]]
+            modules = modules.dropna(subset=["Overall Progress Task (%)"])
+            if not modules.empty:
+                # Color per module (Title), not per client -- with client
+                # as the color, long module names on the x-axis and a
+                # handful of client swatches in the legend crowded right
+                # up against each other and read as clutter, not a legend.
+                # Each bar already has its own module name on the x-axis,
+                # so a per-module legend would just repeat that -- drop it.
+                fig = px.bar(
+                    modules, x="Title", y="Overall Progress Task (%)",
+                    title="Module Progress", text="Overall Progress Task (%)",
+                    color="Title",
+                    category_orders={"Title": modules["Title"].tolist()},
+                )
+                fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+                fig.update_layout(
+                    template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#374151"), xaxis_tickangle=-45, xaxis_title="Module",
+                    yaxis_title="Overall Progress (%)", yaxis_range=[0, 110],
+                    showlegend=False,
+                )
+                charts["client_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
     if "Status Progress" in df.columns:
         valid_status = df.dropna(subset=["Status Progress"])
