@@ -27,6 +27,7 @@
     <table id="project-table">
       <thead>
         <tr>
+          <th class="row-actions-cell">Actions</th>
           {% if project_charts.detail_data and project_charts.detail_data[0] is defined %}
           {% set skip_cols_3 = ['_row_idx', '_source_file', '_op_rowspan'] %}
           {% for key in project_charts.detail_data[0].keys() %}
@@ -42,6 +43,15 @@
         {% for row in project_charts.detail_data %}
           {% if row.get('_op_rowspan', 1) > 0 %}{% set ns_op.group = ns_op.group + 1 %}{% endif %}
         <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" data-op-group="{{ ns_op.group }}" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
+          <td class="row-actions-cell" data-row-idx="{{ row.get('_row_idx', '') }}">
+            {% if row.get('_op_rowspan', 1) > 0 %}
+            <button type="button" class="btn-row-action btn-module-up" title="Move whole module up">&#9650;&#9650;</button>
+            <button type="button" class="btn-row-action btn-module-down" title="Move whole module down">&#9660;&#9660;</button>
+            {% endif %}
+            <button type="button" class="btn-row-action btn-row-up" title="Move row up">&#9650;</button>
+            <button type="button" class="btn-row-action btn-row-down" title="Move row down">&#9660;</button>
+            <button type="button" class="btn-row-action btn-row-delete" title="Delete row">&times;</button>
+          </td>
           {% for key, val in row.items() %}
             {% if key == 'Overall Progress Task (%)' %}
               {% if row.get('_op_rowspan', 1) > 0 %}

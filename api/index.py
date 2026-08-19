@@ -1571,5 +1571,48 @@ def api_add_row():
         return jsonify({"success": False, "error": str(e)}), 400
 
 
+@app.route("/api/reorder_rows", methods=["POST"])
+def api_reorder_rows():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json()
+    table = data.get("table")
+    ids = data.get("ids") or []
+
+    if table != "projects":
+        return jsonify({"success": False, "error": f"Reordering not supported for: {table}"}), 400
+
+    try:
+        db.reorder_project_rows(ids, conn=request_conn())
+        return jsonify({"success": True})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/delete_row", methods=["POST"])
+def api_delete_row():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json()
+    table = data.get("table")
+    row_idx = data.get("row_idx")
+
+    delete_fn = {
+        "projects": db.delete_project_row,
+        "tickets": db.delete_ticket_row,
+        "clients": db.delete_client_row,
+    }.get(table)
+    if not delete_fn:
+        return jsonify({"success": False, "error": f"Unknown table: {table}"}), 400
+
+    try:
+        deleted = delete_fn(int(row_idx), conn=request_conn())
+        return jsonify({"success": True, "deleted": deleted})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=8501)

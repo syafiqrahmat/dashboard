@@ -285,6 +285,15 @@ tr[data-new-row="true"]{background:rgba(44,95,130,0.05)}
 .btn-add-row{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 14px;
   font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:8px}
 .btn-add-row:hover{opacity:0.9}
+.row-actions-cell{display:none;white-space:nowrap;text-align:center;background:rgba(0,0,0,0.02)}
+table.edit-mode .row-actions-cell{display:table-cell}
+.btn-row-action{width:22px;height:22px;line-height:20px;padding:0;margin:1px;
+  border:1px solid var(--border-strong);border-radius:5px;background:#fff;color:var(--text-dim);
+  font-size:0.65rem;cursor:pointer;text-align:center}
+.btn-row-action:hover{border-color:var(--accent);color:var(--accent)}
+.btn-row-delete{border-color:var(--danger);color:var(--danger)}
+.btn-row-delete:hover{background:var(--danger);color:#fff}
+.btn-module-up,.btn-module-down{color:var(--accent);border-color:var(--accent)}
 @keyframes endDateBadgeIn{
   0%{opacity:0;transform:translateY(-4px) scale(0.85)}
   100%{opacity:1;transform:translateY(0) scale(1)}
@@ -1081,6 +1090,89 @@ document.addEventListener('click', function(e) {
   selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'), cell.getAttribute('data-projek-name'));
 });
 
+/* ---------- Project Details: row/module reordering & row delete ------
+   These hit the database immediately (no "pending changes, then Save")
+   and reload the page on success, the same way Reset Database does --
+   there's no meaningful "cancel" for a reorder or a delete once clicked,
+   so there's nothing useful to stage client-side first. */
+function postReorderRows(ids) {
+  return fetch('/api/reorder_rows', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({table: 'projects', ids: ids})
+  }).then(function(r) { return r.json(); });
+}
+function postDeleteRow(dbTable, rowIdx) {
+  return fetch('/api/delete_row', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({table: dbTable, row_idx: rowIdx})
+  }).then(function(r) { return r.json(); });
+}
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.btn-row-action');
+  if (!btn) return;
+  var table = btn.closest('table');
+  if (!table || table.id !== 'project-table') return;
+  var tr = btn.closest('tr');
+  if (!tr || tr.getAttribute('data-new-row') === 'true') return;
+
+  function rowsInGroup(groupId) {
+    return Array.from(table.querySelectorAll('tr[data-op-group="' + groupId + '"]'));
+  }
+  function idOf(r) { return r.getAttribute('data-row-idx'); }
+
+  if (btn.classList.contains('btn-row-delete')) {
+    if (!confirm('Delete this row? This cannot be undone.')) return;
+    postDeleteRow('projects', idOf(tr)).then(function(result) {
+      if (result.success) window.location.reload();
+      else showToast('Delete failed: ' + (result.error || 'unknown'), 'error');
+    }).catch(function(err) { showToast('Delete failed: ' + err.message, 'error'); });
+    return;
+  }
+
+  if (btn.classList.contains('btn-row-up') || btn.classList.contains('btn-row-down')) {
+    var up = btn.classList.contains('btn-row-up');
+    var siblings = rowsInGroup(tr.getAttribute('data-op-group'));
+    var idx = siblings.indexOf(tr);
+    var swapWith = up ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= siblings.length) {
+      showToast('Already at the ' + (up ? 'top' : 'bottom') + ' of this module', 'success');
+      return;
+    }
+    var ids = siblings.map(idOf);
+    var tmp = ids[idx]; ids[idx] = ids[swapWith]; ids[swapWith] = tmp;
+    postReorderRows(ids).then(function(result) {
+      if (result.success) window.location.reload();
+      else showToast('Reorder failed: ' + (result.error || 'unknown'), 'error');
+    }).catch(function(err) { showToast('Reorder failed: ' + err.message, 'error'); });
+    return;
+  }
+
+  if (btn.classList.contains('btn-module-up') || btn.classList.contains('btn-module-down')) {
+    var moveUp = btn.classList.contains('btn-module-up');
+    var thisGroupId = tr.getAttribute('data-op-group');
+    var allGroupIds = [];
+    table.querySelectorAll('tbody tr').forEach(function(r) {
+      var gid = r.getAttribute('data-op-group');
+      if (allGroupIds.indexOf(gid) === -1) allGroupIds.push(gid);
+    });
+    var gIdx = allGroupIds.indexOf(thisGroupId);
+    var otherIdx = moveUp ? gIdx - 1 : gIdx + 1;
+    if (otherIdx < 0 || otherIdx >= allGroupIds.length) {
+      showToast('Already at the ' + (moveUp ? 'top' : 'bottom'), 'success');
+      return;
+    }
+    var thisIds = rowsInGroup(thisGroupId).map(idOf);
+    var otherIds = rowsInGroup(allGroupIds[otherIdx]).map(idOf);
+    var newIds = moveUp ? thisIds.concat(otherIds) : otherIds.concat(thisIds);
+    postReorderRows(newIds).then(function(result) {
+      if (result.success) window.location.reload();
+      else showToast('Reorder failed: ' + (result.error || 'unknown'), 'error');
+    }).catch(function(err) { showToast('Reorder failed: ' + err.message, 'error'); });
+  }
+});
+
 /* Script tags set via .innerHTML never execute (a browser/DOM spec
    quirk, not a bug in this code) -- but every Plotly chart in a tab
    fragment is exactly a div plus a script tag calling Plotly.newPlot(...),
@@ -1361,6 +1453,13 @@ function addBlankRow(table, columns) {
   var tr = document.createElement('tr');
   tr.setAttribute('data-new-row', 'true');
   var removeBtnPlaced = false;
+  // Only project-table's header has a leading Actions column (row/module
+  // move + delete buttons -- meaningless for a row that isn't saved yet),
+  // so match it here too or every real column would shift one cell to
+  // the right of its header.
+  if (table.querySelector('thead th.row-actions-cell')) {
+    tr.appendChild(document.createElement('td')).className = 'row-actions-cell';
+  }
   columns.forEach(function(spec) {
     var col = typeof spec === 'string' ? spec : spec.col;
     var derived = typeof spec === 'object' && spec.derived;

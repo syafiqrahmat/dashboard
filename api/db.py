@@ -134,6 +134,17 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS duration TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS dedup_seq INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS projek_name TEXT;
 
+-- Lets the Project Details table's row/module order be dragged around by
+-- hand instead of being stuck at insertion (id) order. Backfilled from id
+-- the first time this column exists so existing tables keep their current
+-- order until someone actually reorders something; every row inserted
+-- after that always gets an explicit value (see insert_project_row), so
+-- this UPDATE only ever touches genuinely new/legacy NULLs, not rows
+-- someone has already reordered.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS sort_order BIGINT;
+UPDATE projects SET sort_order = id WHERE sort_order IS NULL;
+CREATE INDEX IF NOT EXISTS idx_projects_sort_order ON projects(sort_order);
+
 CREATE TABLE IF NOT EXISTS clients (
     id SERIAL PRIMARY KEY,
     client TEXT,
@@ -483,7 +494,7 @@ def get_filter_metadata(conn=None):
 def fetch_projects_df(conn=None):
     db_cols = [c for _, c in PROJECT_DB_COLUMNS]
     display_cols = [c for c, _ in PROJECT_DB_COLUMNS]
-    sql = f"SELECT id, {', '.join(db_cols)} FROM projects ORDER BY id"
+    sql = f"SELECT id, {', '.join(db_cols)} FROM projects ORDER BY sort_order NULLS LAST, id"
 
     with db_connection(conn) as c:
         df = pd.read_sql_query(sql, c)
@@ -646,13 +657,68 @@ def insert_project_row(db_values, conn=None):
             )
             dedup_seq = cur.fetchone()[0]
             cols = list(values.keys())
-            col_list = ", ".join(cols + ["dedup_seq"])
+            # sort_order comes from a subquery, not a bound parameter, so a
+            # freshly added row always lands at the end of the current
+            # display order rather than defaulting to NULL (which would
+            # sort first under NULLS LAST... no -- NULLS LAST already
+            # keeps it last, but giving it a real value here means a
+            # *later* reorder can freely move it without a NULL ever
+            # comparing oddly against real sort_order values).
+            col_list = ", ".join(cols + ["dedup_seq", "sort_order"])
             placeholders = ", ".join(["%s"] * (len(cols) + 1))
             cur.execute(
-                f"INSERT INTO projects ({col_list}) VALUES ({placeholders}) RETURNING id",
+                f"INSERT INTO projects ({col_list}) VALUES "
+                f"({placeholders}, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects)) RETURNING id",
                 [values[c] for c in cols] + [dedup_seq],
             )
             return cur.fetchone()[0]
+
+
+def reorder_project_rows(ids, conn=None):
+    """Reassign sort_order for exactly this set of project row ids, in the
+    order given, reusing the same set of sort_order values those rows
+    already occupy (just permuted). That confines the change to swapping
+    these rows/blocks among themselves -- every other row's sort_order,
+    and therefore its position relative to rows outside this set, is left
+    completely untouched.
+    """
+    ids = [int(i) for i in ids]
+    if not ids:
+        return
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT id, sort_order FROM projects WHERE id = ANY(%s)", (ids,))
+            rows = dict(cur.fetchall())
+            missing = [i for i in ids if i not in rows]
+            if missing:
+                raise ValueError(f"Unknown project row id(s): {missing}")
+            slots = sorted(v if v is not None else k for k, v in rows.items())
+            for row_id, slot in zip(ids, slots):
+                cur.execute(
+                    "UPDATE projects SET sort_order = %s, updated_at = now() WHERE id = %s",
+                    (slot, row_id),
+                )
+
+
+def delete_project_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM projects WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
+
+
+def delete_ticket_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM tickets WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
+
+
+def delete_client_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM clients WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
 
 
 def insert_client_row(db_values, conn=None):
