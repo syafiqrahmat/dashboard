@@ -605,8 +605,8 @@ def build_overall_client_charts(df, tickets_df=None):
     if tickets_df is not None and not tickets_df.empty and "Client" in tickets_df.columns and "Ticket Status" in tickets_df.columns:
         for client, statuses in tickets_df.groupby("Client")["Ticket Status"]:
             ticket_stats_by_client[client] = {
-                "Completed": int((statuses == "Completed").sum()),
-                "Closed": int((statuses == "Closed").sum()),
+                "Pending": int((statuses == "Pending").sum()),
+                "In Progress": int((statuses == "In Progress").sum()),
                 "Total Tickets": int(len(statuses)),
             }
 
@@ -645,9 +645,9 @@ def build_overall_client_charts(df, tickets_df=None):
         rows = sdf.to_dict("records")
         if status == "Maintenance":
             for row in rows:
-                stats = ticket_stats_by_client.get(row.get("Client"), {"Completed": 0, "Closed": 0, "Total Tickets": 0})
+                stats = ticket_stats_by_client.get(row.get("Client"), {"Pending": 0, "In Progress": 0, "Total Tickets": 0})
                 row.update(stats)
-            rows.sort(key=lambda r: r["Total Tickets"], reverse=True)
+            rows.sort(key=lambda r: r["Pending"] + r["In Progress"], reverse=True)
         return rows
 
     charts["status_sections"] = {}

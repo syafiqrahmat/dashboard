@@ -61,7 +61,7 @@
             </td>
             {% elif key == 'End Date' and display_val %}
             <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
-            {% elif key in ['Completed', 'Closed', 'Total Tickets'] %}
+            {% elif key in ['Pending', 'In Progress', 'Total Tickets'] %}
             <td class="stat-cell" data-col="{{ key }}">{{ display_val }}</td>
             {% else %}
             <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
