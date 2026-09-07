@@ -591,10 +591,24 @@ def build_project_charts(df):
     return charts
 
 
-def build_overall_client_charts(df):
+def build_overall_client_charts(df, tickets_df=None):
     charts = {}
     if df.empty:
         return charts
+
+    # Per-client ticket totals for the Maintenance section below. Tickets
+    # aren't reliably linkable to one specific project row (see
+    # _narrow_by_projek_name), so this is aggregated per Client rather than
+    # per Projek Name -- a client with two Maintenance rows will show the
+    # same totals on both.
+    ticket_stats_by_client = {}
+    if tickets_df is not None and not tickets_df.empty and "Client" in tickets_df.columns and "Ticket Status" in tickets_df.columns:
+        for client, statuses in tickets_df.groupby("Client")["Ticket Status"]:
+            ticket_stats_by_client[client] = {
+                "Completed": int((statuses == "Completed").sum()),
+                "Closed": int((statuses == "Closed").sum()),
+                "Total Tickets": int(len(statuses)),
+            }
 
     total = len(df)
     unique_clients = df["Client"].nunique() if "Client" in df.columns else 0
@@ -617,7 +631,7 @@ def build_overall_client_charts(df):
             )
             charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    display_cols = ["Client", "Projek ID", "Projek Name", "Projek Status", "Start Date", "End Date"]
+    display_cols = ["Client", "Projek ID", "Projek Name", "Projek Status", "Start Date", "End Date", "Technology"]
     avail = [c for c in display_cols if c in df.columns]
     meta_cols = [c for c in ["_row_idx", "Source File"] if c in df.columns]
     detail = df[avail + meta_cols].copy()
@@ -626,6 +640,15 @@ def build_overall_client_charts(df):
             detail[c] = detail[c].dt.strftime("%d/%m/%Y")
     detail = detail.fillna("")
     charts["detail_data"] = detail.to_dict("records")
+
+    def section_rows(sdf, status):
+        rows = sdf.to_dict("records")
+        if status == "Maintenance":
+            for row in rows:
+                stats = ticket_stats_by_client.get(row.get("Client"), {"Completed": 0, "Closed": 0, "Total Tickets": 0})
+                row.update(stats)
+            rows.sort(key=lambda r: r["Total Tickets"], reverse=True)
+        return rows
 
     charts["status_sections"] = {}
     if "Projek Status" in detail.columns:
@@ -638,7 +661,7 @@ def build_overall_client_charts(df):
                     continue
                 charts["status_sections"][status] = {
                     "count": int(len(sdf)),
-                    "rows": sdf.to_dict("records"),
+                    "rows": section_rows(sdf, status),
                 }
         for status in sorted(set(statuses) - set(status_order), key=lambda s: str(s).lower()):
             sdf = detail[detail["Projek Status"] == status]
@@ -646,7 +669,7 @@ def build_overall_client_charts(df):
                 continue
             charts["status_sections"][status] = {
                 "count": int(len(sdf)),
-                "rows": sdf.to_dict("records"),
+                "rows": section_rows(sdf, status),
             }
 
     return charts
@@ -1215,7 +1238,13 @@ def build_tab_context(idx, filters, filter_options, df=None):
             log(f"DB error loading clients: {e}", "ERROR")
             client_df = pd.DataFrame()
         has_client = not client_df.empty
-        overall_client_charts = build_overall_client_charts(client_df) if has_client else {}
+        tickets_df = pd.DataFrame()
+        if has_client:
+            try:
+                tickets_df, _ = load_data({})
+            except Exception as e:
+                log(f"DB error loading tickets for Home totals: {e}", "ERROR")
+        overall_client_charts = build_overall_client_charts(client_df, tickets_df) if has_client else {}
         return "tabs/tab_9.html", {**common, "has_client": has_client, "overall_client_charts": overall_client_charts}
 
     if idx == 10:

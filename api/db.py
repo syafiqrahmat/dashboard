@@ -74,6 +74,7 @@ CLIENT_DB_COLUMNS = [
     ("Projek Status", "projek_status"),
     ("Start Date", "start_date"),
     ("End Date", "end_date"),
+    ("Technology", "technology"),
     ("Source File", "source_file"),
 ]
 
@@ -153,11 +154,15 @@ CREATE TABLE IF NOT EXISTS clients (
     projek_status TEXT,
     start_date DATE,
     end_date DATE,
+    technology TEXT,
     source_file TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (client, projek_id)
 );
+
+-- Column added after the table already existed in production.
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS technology TEXT;
 
 -- The source "Client Project" sheet has many rows with a blank title
 -- and/or start/due date (sub-item description lines, section

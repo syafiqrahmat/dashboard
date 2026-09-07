@@ -265,12 +265,15 @@ body::after{
 }
 .client-link:hover{text-decoration:underline}
 
-/* ---------- End Date corner banner (Overall Client tab) ---------- */
-.end-date-cell{position:relative}
+/* ---------- End Date badge (Overall Client tab) ----------
+   Rendered in its own trailing column so it always sits at the end of the
+   row, no matter how many columns (Technology, ticket totals, ...) come
+   between it and the End Date column itself. */
+.end-date-badge-cell{white-space:nowrap;text-align:center}
 .end-date-badge{
-  position:absolute;top:2px;right:2px;padding:1px 6px;border-radius:4px;
+  display:inline-block;padding:1px 6px;border-radius:4px;
   font-size:0.62rem;font-weight:800;letter-spacing:0.3px;text-transform:uppercase;
-  line-height:1.5;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,0.25);
+  line-height:1.5;box-shadow:0 1px 3px rgba(0,0,0,0.25);
   animation:endDateBadgeIn 0.35s ease-out;
 }
 .end-date-badge.due-soon{background:#f5c518;color:#5c4600}
@@ -396,6 +399,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 .edit-mode td input.changed{background:#fff3cd;border-color:#f39c12}
 .editable-cell{cursor:pointer}
 .editable-cell:hover{background:#f0f7ff}
+.stat-cell{text-align:center;font-weight:600;color:var(--accent, #2c3e50)}
 .op-merged-cell{
   text-align:center;font-weight:700;color:var(--accent);
   background:rgba(44,95,130,0.1);border-left:3px solid var(--accent);border-right:3px solid var(--accent);
@@ -1025,21 +1029,22 @@ function toggleSidebar() {
     if (sb) sb.classList.add('collapsed');
   });
 })();
-/* ---------- End Date corner banner (Overall Client tab) ----------
+/* ---------- End Date badge (Overall Client tab) ----------
    Flags rows whose End Date is within the next month (yellow "Due Soon")
-   or already in the past (red "Overdue"). Runs after render since the
-   dates are baked into the table as plain dd/mm/yyyy text server-side. */
+   or already in the past (red "Overdue"), rendered into the row's own
+   trailing badge cell so it always lands at the end of the row rather
+   than wherever the End Date column happens to sit. Runs after render
+   since the dates are baked into the table as plain dd/mm/yyyy text
+   server-side. */
 function applyEndDateBadges() {
-  var cells = document.querySelectorAll('.end-date-cell');
+  var cells = document.querySelectorAll('.end-date-badge-cell');
   if (!cells.length) return;
   var today = new Date();
   today.setHours(0, 0, 0, 0);
   var SOON_DAYS = 30;
   cells.forEach(function(cell) {
-    var existing = cell.querySelector('.end-date-badge');
-    if (existing) existing.remove();
-    if (cell.querySelector('input')) return;
-    var text = cell.textContent.trim();
+    cell.innerHTML = '';
+    var text = (cell.getAttribute('data-end-date') || '').trim();
     var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
     if (!m) return;
     var due = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));

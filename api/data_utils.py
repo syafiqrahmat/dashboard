@@ -73,6 +73,8 @@ COLUMN_MAPPING = {
     "ageing": "Ageing",
     "aging": "Ageing",
     "client": "Client",
+    "technology": "Technology",
+    "tech": "Technology",
 }
 
 # Ticket dataframe columns, in the order they're stored in the DB.
@@ -93,7 +95,7 @@ PROJECT_COLUMNS = [
 
 CLIENT_COLUMNS = [
     "Client", "Projek ID", "Projek Name", "Projek Status",
-    "Start Date", "End Date", "Source File",
+    "Start Date", "End Date", "Technology", "Source File",
 ]
 
 
@@ -232,6 +234,26 @@ def parse_ticket_sheet(df, client, source_file):
     else:
         df["Client"] = df["Client"].fillna(client)
     df["Source File"] = source_file
+
+    # A client's own ticket sheet can mix warranty-period tickets in with
+    # its regular ones (Task Type == "Warranty") rather than keeping them
+    # on a separate sheet -- e.g. MTIB's sheet has both. The Warranty tab
+    # only ever looks at a shared "Client Warranty" sentinel value (with
+    # the real client recorded in Company instead), so a warranty row
+    # left under its real Client name here would silently never show up
+    # there. Route it automatically at parse time instead of requiring a
+    # manual per-row edit in the source spreadsheet: fall back to this
+    # row's already-resolved Client as Company first, since a sheet like
+    # MTIB's already fills Company on every row but a sheet relying purely
+    # on its own name might not.
+    if "Task Type" in df.columns:
+        is_warranty = df["Task Type"].astype(str).str.strip().str.lower() == "warranty"
+        if is_warranty.any():
+            if "Company" not in df.columns:
+                df["Company"] = None
+            company_blank = df["Company"].isna() | df["Company"].astype(str).str.strip().isin(["", "nan", "None"])
+            df.loc[is_warranty & company_blank, "Company"] = df.loc[is_warranty & company_blank, "Client"]
+            df.loc[is_warranty, "Client"] = "Client Warranty"
 
     df = convert_dtypes(df)
 
