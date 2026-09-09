@@ -88,9 +88,21 @@ TICKET_COLUMNS = [
 
 PROJECT_COLUMNS = [
     "Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority",
-    "Start date", "Due date", "Target Date", "Duration", "Assigned to",
-    "Status Progress", "Percentage", "Overall Progress Task (%)", "Source File",
-    "Dedup Seq",
+    "Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date",
+    "Actual Start Date", "Actual End Date", "Duration", "Assigned to",
+    "Status Progress", "Percentage", "Overall Progress Task (%)",
+    "Source File", "Dedup Seq",
+]
+
+# The three date "types" a task can carry: Plan (the originally scheduled
+# dates -- what used to be the sheet's bare Start date/Due date), Target
+# (the current committed date, e.g. after a revision), and Actual (what
+# really happened). Duration and the Gantt chart are both derived from
+# Plan Start/End Date specifically -- see recompute_duration() and
+# build_project_charts() in index.py.
+PROJECT_DATE_COLUMNS = [
+    "Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date",
+    "Actual Start Date", "Actual End Date",
 ]
 
 CLIENT_COLUMNS = [
@@ -323,6 +335,23 @@ def parse_project_sheet(df, source_file):
     rename_map = {c: "Projek Name" for c in df.columns if str(c).strip().lower() in ("projek name", "projek_name")}
     if rename_map:
         df = df.rename(columns=rename_map)
+
+    # The source sheet still carries the old bare "Start date"/"Due date"/
+    # "Target Date" headers -- fold them into the Plan/Target date scheme
+    # here so nothing needs to change upstream in the workbook. Old Start
+    # date/Due date become the Plan dates (they always meant "originally
+    # scheduled"); the old single Target Date becomes Target End Date,
+    # since it was used as a one-sided deadline, not a range.
+    legacy_date_rename = {}
+    if "Start date" in df.columns and "Plan Start Date" not in df.columns:
+        legacy_date_rename["Start date"] = "Plan Start Date"
+    if "Due date" in df.columns and "Plan End Date" not in df.columns:
+        legacy_date_rename["Due date"] = "Plan End Date"
+    if "Target Date" in df.columns and "Target End Date" not in df.columns:
+        legacy_date_rename["Target Date"] = "Target End Date"
+    if legacy_date_rename:
+        df = df.rename(columns=legacy_date_rename)
+
     if "Client" in df.columns:
         df["Client"] = df["Client"].ffill()
     df["Source File"] = source_file
@@ -360,10 +389,10 @@ def parse_project_sheet(df, source_file):
     # already blank, so a row with its own genuine value (e.g. every
     # numbered task already has its own date range) is left untouched.
     block_cols = [c for c in [
-        "Projek Name", "Category", "Progress", "Priority", "Start date", "Due date", "Tempoh",
-        "Target Date", "Assigned to", "Status Progress", "Percentage",
+        "Projek Name", "Category", "Progress", "Priority", "Tempoh",
+        "Assigned to", "Status Progress", "Percentage",
         "Overall Progress Task (%)",
-    ] if c in df.columns]
+    ] + PROJECT_DATE_COLUMNS if c in df.columns]
     if block_cols and "Title" in df.columns and "Client" in df.columns:
         df[block_cols] = df.groupby(["Client", "Title"])[block_cols].transform(lambda s: s.ffill())
 
@@ -371,7 +400,7 @@ def parse_project_sheet(df, source_file):
         df["Duration"] = df["Tempoh"].astype(str)
         df.loc[df["Tempoh"].isna(), "Duration"] = None
 
-    for c in ["Start date", "Due date", "Target Date"]:
+    for c in PROJECT_DATE_COLUMNS:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
 
@@ -383,7 +412,7 @@ def parse_project_sheet(df, source_file):
     # counter (never NULL) fixes that: as long as the sheet's row order
     # is unchanged between uploads, the same row gets the same sequence
     # number and updates in place instead of inserting a duplicate.
-    key_basis = df[["Title", "Start date", "Due date", "Description"]] if "Description" in df.columns else df[["Title", "Start date", "Due date"]]
+    key_basis = df[["Title", "Plan Start Date", "Plan End Date", "Description"]] if "Description" in df.columns else df[["Title", "Plan Start Date", "Plan End Date"]]
     df["Dedup Seq"] = key_basis.astype(str).groupby(list(key_basis.columns)).cumcount()
 
     if "Percentage" in df.columns:

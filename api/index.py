@@ -325,19 +325,19 @@ def recompute_status_from_percentage(df):
 
 
 def recompute_duration(df):
-    """Duration is derived, not typed -- Start date through Due date,
-    inclusive of both ends, with Saturdays not counted (so a 7-day
+    """Duration is derived, not typed -- Plan Start Date through Plan End
+    Date, inclusive of both ends, with Saturdays not counted (so a 7-day
     calendar week is 6 days of duration). Recomputed on every load so
     editing either date always keeps Duration in sync, the same way
     Status Progress stays in sync with Percentage.
     """
-    if df.empty or not {"Start date", "Due date"}.issubset(df.columns):
+    if df.empty or not {"Plan Start Date", "Plan End Date"}.issubset(df.columns):
         return df
 
     df = df.copy()
 
     def duration_for(row):
-        start, end = row["Start date"], row["Due date"]
+        start, end = row["Plan Start Date"], row["Plan End Date"]
         if pd.isna(start) or pd.isna(end) or end < start:
             return None
         days = (end - start).days + 1
@@ -412,8 +412,8 @@ def build_project_charts(df):
             fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"))
             charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    if "Start date" in df.columns and "Due date" in df.columns and "Title" in df.columns:
-        valid = df.dropna(subset=["Start date", "Due date", "Title"]).copy()
+    if "Plan Start Date" in df.columns and "Plan End Date" in df.columns and "Title" in df.columns:
+        valid = df.dropna(subset=["Plan Start Date", "Plan End Date", "Title"]).copy()
         valid = valid[valid["Title"].astype(str).str.strip() != ""]
         if "Description" in valid.columns:
             valid["Task Label"] = valid["Description"].astype(str)
@@ -437,135 +437,171 @@ def build_project_charts(df):
             timeline_charts_html = ""
             if "Client" in valid.columns:
                 for client in sorted(valid["Client"].dropna().unique()):
-                    cdf = valid[valid["Client"] == client].copy()
-                    if cdf.empty:
+                    cdf_client = valid[valid["Client"] == client]
+                    if cdf_client.empty:
                         continue
-                    # Row Label (Project: Task) usually gives each task its
-                    # own row, but a project can legitimately have two rows
-                    # with the exact same description (a generic recurring
-                    # checklist item like "Sign-off", or two "UAT" rounds) --
-                    # a *shared string* y-axis category collapses those onto
-                    # one line no matter how the string is built. Give every
-                    # row its own guaranteed-unique numeric position instead
-                    # (one row of cdf = one position, always, by
-                    # construction) and only use Row Label as the tick text
-                    # shown at that position -- so two rows with identical
-                    # text still each get their own line.
-                    #
-                    # Preserve cdf's incoming order rather than re-sorting
-                    # it (previously by Row Label/Start date) so the chart's
-                    # row order matches the Project Details table's row
-                    # order -- both ultimately come from the same
-                    # project_df, fetched `ORDER BY id`, so as long as
-                    # neither re-sorts they stay in the same sequence.
-                    cdf = cdf.reset_index(drop=True)
-                    cdf["Y Pos"] = cdf.index
-                    # Coloring by Client here was a no-op -- every row in
-                    # cdf already shares the same Client, so every bar came
-                    # out one uniform color. Color by Category instead so
-                    # different kinds of work are visually distinguishable;
-                    # but if this client's tasks are all the same Category
-                    # too (equally uniform, equally uninformative), color
-                    # by the task itself (Task Label, from Description) so
-                    # each bar in the timeline still reads as distinct.
-                    categories = cdf["Category"].dropna().unique() if "Category" in cdf.columns else []
-                    color_col = "Category" if len(categories) > 1 else "Task Label"
-                    color_values = sorted(cdf[color_col].dropna().astype(str).unique().tolist())
-                    palette = px.colors.qualitative.Plotly
-                    color_map = {val: palette[i % len(palette)] for i, val in enumerate(color_values)}
-
-                    # A milestone (Start date == Due date, e.g. "Go Live")
-                    # and a real 1-day task (Due date = Start date + 1) are
-                    # both, in plain terms, "this happened on one day" --
-                    # they used to render completely differently (a diamond
-                    # marker vs. a bar), which is the inconsistency being
-                    # fixed here. Both now render as the exact same bar:
-                    # a milestone's Due date is treated as Start date + 1
-                    # day purely for the chart (real Due date/Duration
-                    # elsewhere untouched), so every ~1-day task gets
-                    # identical, standardized sizing regardless of which
-                    # way it happened to be recorded.
-                    chart_due = cdf["Due date"].where(cdf["Due date"] != cdf["Start date"], cdf["Start date"] + pd.Timedelta(days=1))
-                    cdf = cdf.assign(**{"Chart Due": chart_due})
-
-                    # A short bar does have an actual duration, so it's
-                    # fair to give it a minimum visible length on the date
-                    # axis, scaled to this client's own chart span -- this
-                    # doesn't invent a date range that never existed, it
-                    # just guarantees a short-but-real one doesn't round
-                    # down to invisible. Capped at 2 days: uncapped, this
-                    # scaled with the *whole chart's* span (which can be
-                    # dominated by an unrelated multi-year task elsewhere
-                    # in the same client), so on a wide enough chart a
-                    # boosted 1-day task could stretch past a genuine,
-                    # unboosted 3-4 day task and visually look longer than
-                    # something that actually took more real time -- capping
-                    # at 2 days keeps it strictly below the >2-day tier that
-                    # never gets boosted, so relative ordering is never
-                    # inverted by the correction meant to just aid visibility.
-                    span_days = max((cdf["Chart Due"].max() - cdf["Start date"].min()).days, 1)
-                    min_bar_ms = min(max(1, round(span_days * 0.015)), 2) * 86400000
-
-                    fig = go.Figure()
-                    for val in color_values:
-                        rdf = cdf[cdf[color_col].astype(str) == val]
-                        if rdf.empty:
+                    # Broken down one Gantt chart per module (Title) instead
+                    # of one giant chart mixing every module's tasks
+                    # together -- each module renders as its own collapsed
+                    # card (see .gantt-title-card / <details> below) so a
+                    # client with several modules (e.g. LKTN's Payroll,
+                    # Claim, Asset, ...) isn't one overwhelming wall of
+                    # bars; the chart for a module only needs to render
+                    # once its card is actually opened. Order preserved
+                    # (not sorted) so cards appear in the same order as the
+                    # Project Details table's modules.
+                    title_cards_html = ""
+                    for title in cdf_client["Title"].drop_duplicates():
+                        cdf = cdf_client[cdf_client["Title"] == title].copy()
+                        if cdf.empty:
                             continue
-                        bar_days = (rdf["Chart Due"] - rdf["Start date"]).dt.days
-                        # Thicker vertically (row height) AND given a
-                        # visible minimum horizontal length -- short tasks
-                        # need to stand out in both directions, not just
-                        # one, and every ~1-day task (bar_days <= 1) gets
-                        # the exact same standardized thickness/width.
-                        bar_widths = bar_days.apply(lambda d: 0.9 if d <= 1 else (0.85 if d <= 2 else 0.7))
-                        bar_ms = (rdf["Chart Due"] - rdf["Start date"]).dt.total_seconds() * 1000
-                        bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
-                        fig.add_trace(go.Bar(
-                            base=rdf["Start date"],
-                            # A raw pandas Timedelta isn't JSON-serializable
-                            # in every Plotly version -- milliseconds (a
-                            # plain float) is how Plotly represents a bar's
-                            # width on a date axis internally either way.
-                            x=bar_ms,
-                            y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
-                            name=val, legendgroup=val, marker_color=color_map[val],
-                            customdata=rdf[["Row Label", "Start date", "Due date"]].astype(str),
-                            hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
-                        ))
+                        # Row Label (Project: Task) usually gives each task
+                        # its own row, but a project can legitimately have
+                        # two rows with the exact same description (a
+                        # generic recurring checklist item like "Sign-off",
+                        # or two "UAT" rounds) -- a *shared string* y-axis
+                        # category collapses those onto one line no matter
+                        # how the string is built. Give every row its own
+                        # guaranteed-unique numeric position instead (one
+                        # row of cdf = one position, always, by
+                        # construction) and only use Row Label as the tick
+                        # text shown at that position -- so two rows with
+                        # identical text still each get their own line.
+                        #
+                        # Preserve cdf's incoming order rather than
+                        # re-sorting it (previously by Row Label/Start
+                        # date) so the chart's row order matches the
+                        # Project Details table's row order -- both
+                        # ultimately come from the same project_df, fetched
+                        # `ORDER BY id`, so as long as neither re-sorts
+                        # they stay in the same sequence.
+                        cdf = cdf.reset_index(drop=True)
+                        cdf["Y Pos"] = cdf.index
+                        # Coloring by Client here was a no-op -- every row
+                        # in cdf already shares the same Client, so every
+                        # bar came out one uniform color. Color by Category
+                        # instead so different kinds of work are visually
+                        # distinguishable; but if this module's tasks are
+                        # all the same Category too (equally uniform,
+                        # equally uninformative), color by the task itself
+                        # (Task Label, from Description) so each bar in the
+                        # timeline still reads as distinct.
+                        categories = cdf["Category"].dropna().unique() if "Category" in cdf.columns else []
+                        color_col = "Category" if len(categories) > 1 else "Task Label"
+                        color_values = sorted(cdf[color_col].dropna().astype(str).unique().tolist())
+                        palette = px.colors.qualitative.Plotly
+                        color_map = {val: palette[i % len(palette)] for i, val in enumerate(color_values)}
 
-                    # tickvals/ticktext (not a categorical axis) is what
-                    # lets the same description repeat as text on two
-                    # different rows without Plotly merging them back down
-                    # to one category. margin (row spacing) comes from the
-                    # bar width values above (0.7/0.9), leaving 10-30% of
-                    # each row's slot empty.
-                    fig.update_yaxes(
-                        autorange="reversed", title=None,
-                        tickmode="array", tickvals=cdf["Y Pos"], ticktext=cdf["Task Label"],
-                        tickfont=dict(size=14),
-                    )
-                    fig.update_xaxes(title="Tarikh", type="date")
-                    fig.update_layout(
-                        template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="#374151"), title=f"{client} - PROJECT DEVELOPMENT TIMELINE",
-                        # Y-axis already shows the plain task name and
-                        # hovering shows the full project+task+dates, so
-                        # the color-key legend is redundant screen space.
-                        showlegend=False,
-                        height=max(480, 95*len(cdf)),
-                        margin=dict(l=180),
-                        font_size=15,
-                    )
-                    timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False, "responsive": True})}</div>'
+                        # A milestone (Start date == Due date, e.g. "Go
+                        # Live") and a real 1-day task (Due date = Start
+                        # date + 1) are both, in plain terms, "this
+                        # happened on one day" -- they used to render
+                        # completely differently (a diamond marker vs. a
+                        # bar), which is the inconsistency being fixed
+                        # here. Both now render as the exact same bar: a
+                        # milestone's Due date is treated as Start date + 1
+                        # day purely for the chart (real Due date/Duration
+                        # elsewhere untouched), so every ~1-day task gets
+                        # identical, standardized sizing regardless of
+                        # which way it happened to be recorded.
+                        chart_due = cdf["Plan End Date"].where(cdf["Plan End Date"] != cdf["Plan Start Date"], cdf["Plan Start Date"] + pd.Timedelta(days=1))
+                        cdf = cdf.assign(**{"Chart Due": chart_due})
+
+                        # A short bar does have an actual duration, so it's
+                        # fair to give it a minimum visible length on the
+                        # date axis, scaled to this module's own chart span
+                        # -- this doesn't invent a date range that never
+                        # existed, it just guarantees a short-but-real one
+                        # doesn't round down to invisible. Capped at 2
+                        # days: uncapped, this scaled with the *whole
+                        # chart's* span (which can be dominated by an
+                        # unrelated multi-year task elsewhere in the same
+                        # module), so on a wide enough chart a boosted
+                        # 1-day task could stretch past a genuine,
+                        # unboosted 3-4 day task and visually look longer
+                        # than something that actually took more real time
+                        # -- capping at 2 days keeps it strictly below the
+                        # >2-day tier that never gets boosted, so relative
+                        # ordering is never inverted by the correction
+                        # meant to just aid visibility.
+                        span_days = max((cdf["Chart Due"].max() - cdf["Plan Start Date"].min()).days, 1)
+                        min_bar_ms = min(max(1, round(span_days * 0.015)), 2) * 86400000
+
+                        fig = go.Figure()
+                        for val in color_values:
+                            rdf = cdf[cdf[color_col].astype(str) == val]
+                            if rdf.empty:
+                                continue
+                            bar_days = (rdf["Chart Due"] - rdf["Plan Start Date"]).dt.days
+                            # Thicker vertically (row height) AND given a
+                            # visible minimum horizontal length -- short
+                            # tasks need to stand out in both directions,
+                            # not just one, and every ~1-day task
+                            # (bar_days <= 1) gets the exact same
+                            # standardized thickness/width.
+                            bar_widths = bar_days.apply(lambda d: 0.9 if d <= 1 else (0.85 if d <= 2 else 0.7))
+                            bar_ms = (rdf["Chart Due"] - rdf["Plan Start Date"]).dt.total_seconds() * 1000
+                            bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
+                            fig.add_trace(go.Bar(
+                                base=rdf["Plan Start Date"],
+                                # A raw pandas Timedelta isn't
+                                # JSON-serializable in every Plotly version
+                                # -- milliseconds (a plain float) is how
+                                # Plotly represents a bar's width on a date
+                                # axis internally either way.
+                                x=bar_ms,
+                                y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
+                                name=val, legendgroup=val, marker_color=color_map[val],
+                                customdata=rdf[["Row Label", "Plan Start Date", "Plan End Date"]].astype(str),
+                                hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
+                            ))
+
+                        # tickvals/ticktext (not a categorical axis) is
+                        # what lets the same description repeat as text on
+                        # two different rows without Plotly merging them
+                        # back down to one category. margin (row spacing)
+                        # comes from the bar width values above (0.7/0.9),
+                        # leaving 10-30% of each row's slot empty.
+                        fig.update_yaxes(
+                            autorange="reversed", title=None,
+                            tickmode="array", tickvals=cdf["Y Pos"], ticktext=cdf["Task Label"],
+                            tickfont=dict(size=14),
+                        )
+                        fig.update_xaxes(title="Tarikh", type="date")
+                        fig.update_layout(
+                            template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(color="#374151"),
+                            # Y-axis already shows the plain task name and
+                            # hovering shows the full project+task+dates,
+                            # so the color-key legend is redundant screen
+                            # space.
+                            showlegend=False,
+                            height=max(420, 95*len(cdf)),
+                            margin=dict(l=180),
+                            font_size=15,
+                        )
+                        chart_html = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False, "responsive": True})
+                        title_label = title if str(title).strip() else "(Untitled)"
+                        title_cards_html += (
+                            f'<details class="gantt-title-card"><summary>{title_label} ({len(cdf)} tasks)</summary>'
+                            f'<div class="gantt-title-card-body">{chart_html}</div></details>'
+                        )
+                    if title_cards_html:
+                        timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{title_cards_html}</div>'
             charts["timeline_chart"] = timeline_charts_html
 
-    display_cols_p = ["Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority", "Start date", "Due date", "Target Date", "Duration", "Assigned to", "Status Progress", "Percentage", "Overall Progress Task (%)"]
+    display_cols_p = [
+        "Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority",
+        "Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date",
+        "Actual Start Date", "Actual End Date", "Duration", "Assigned to",
+        "Status Progress", "Percentage", "Overall Progress Task (%)",
+    ]
     avail_p = [c for c in display_cols_p if c in df.columns]
     meta_p = [c for c in ["_row_idx", "_source_file"] if c in df.columns]
     detail = df[avail_p + meta_p].copy()
-    for c in ["Start date", "Due date", "Target Date"]:
+    for c in ["Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date", "Actual Start Date", "Actual End Date"]:
         if c in detail.columns:
-            detail[c] = detail[c].dt.strftime("%d/%m/%Y") if not detail[c].isna().all() else detail[c]
+            detail[c] = detail[c].dt.strftime("%d/%m/%Y") if detail[c].notna().any() else ""
     detail = detail.fillna("")
     detail_records = detail.to_dict("records")
 
@@ -591,7 +627,7 @@ def build_project_charts(df):
     return charts
 
 
-def build_overall_client_charts(df, tickets_df=None):
+def build_overall_client_charts(df, tickets_df=None, project_df=None):
     charts = {}
     if df.empty:
         return charts
@@ -608,6 +644,31 @@ def build_overall_client_charts(df, tickets_df=None):
                 "Pending": int((statuses == "Pending").sum()),
                 "In Progress": int((statuses == "In Progress").sum()),
                 "Total Tickets": int(len(statuses)),
+            }
+
+    # A project's tasks in the Project Details table each carry their own
+    # Actual Start/End Date, which naturally vary from task to task -- there
+    # is no single "the" actual date for the project as a whole. Covering
+    # the full span means taking the earliest Actual Start Date and the
+    # latest Actual End Date across every task under that (Client, Projek
+    # Name), the same way a Gantt chart's overall span is read off its
+    # first and last bars. Keyed by (Client, Projek Name) rather than just
+    # Client so a client with more than one project (e.g. MARA) doesn't
+    # blend two unrelated projects' actual dates together.
+    show_actual_span_cols = (
+        project_df is not None and not project_df.empty
+        and {"Client", "Projek Name", "Actual Start Date", "Actual End Date"}.issubset(project_df.columns)
+    )
+    actual_span_by_project = {}
+    if show_actual_span_cols:
+        for (client, projek_name), pdf in project_df.groupby(["Client", "Projek Name"]):
+            start_min = pdf["Actual Start Date"].min()
+            end_max = pdf["Actual End Date"].max()
+            if pd.isna(start_min) and pd.isna(end_max):
+                continue
+            actual_span_by_project[(client, projek_name)] = {
+                "Actual Start Date": "" if pd.isna(start_min) else start_min.strftime("%d/%m/%Y"),
+                "Actual End Date": "" if pd.isna(end_max) else end_max.strftime("%d/%m/%Y"),
             }
 
     total = len(df)
@@ -639,6 +700,20 @@ def build_overall_client_charts(df, tickets_df=None):
         if c in detail.columns and not detail[c].isna().all():
             detail[c] = detail[c].dt.strftime("%d/%m/%Y")
     detail = detail.fillna("")
+
+    if show_actual_span_cols:
+        # Inserted right after End Date (not appended) so they sit beside
+        # it in the table -- the closest existing "when does this run"
+        # column -- rather than trailing behind Technology/ticket stats.
+        end_date_pos = detail.columns.get_loc("End Date") + 1 if "End Date" in detail.columns else len(detail.columns)
+        detail.insert(end_date_pos, "Actual Start Date", "")
+        detail.insert(end_date_pos + 1, "Actual End Date", "")
+        for i, row in detail.iterrows():
+            span = actual_span_by_project.get((row.get("Client"), row.get("Projek Name")))
+            if span:
+                detail.loc[i, "Actual Start Date"] = span["Actual Start Date"]
+                detail.loc[i, "Actual End Date"] = span["Actual End Date"]
+
     charts["detail_data"] = detail.to_dict("records")
 
     def section_rows(sdf, status):
@@ -1152,6 +1227,17 @@ def build_tab_context(idx, filters, filter_options, df=None):
             narrowed = project_df[project_df["Projek Name"] == projek_name]
             if not narrowed.empty:
                 project_df = narrowed
+            elif project_df["Projek Name"].isna().all():
+                # Some clients' Client Project sheet rows never carry their
+                # own Projek Name at all (e.g. LKTN) -- there's nothing to
+                # disambiguate against, so it's safe to label every row
+                # with the project that was actually clicked instead of
+                # leaving the column blank in the table. If the client's
+                # rows DO carry a (different, non-matching) Projek Name
+                # elsewhere, this branch is skipped and the unnarrowed set
+                # is shown instead, same safety rule as the ticket side.
+                project_df = project_df.copy()
+                project_df["Projek Name"] = projek_name
         project_df = recompute_status_from_percentage(project_df)
         project_df = recompute_overall_progress(project_df)
         project_df = recompute_duration(project_df)
@@ -1239,12 +1325,17 @@ def build_tab_context(idx, filters, filter_options, df=None):
             client_df = pd.DataFrame()
         has_client = not client_df.empty
         tickets_df = pd.DataFrame()
+        project_df = pd.DataFrame()
         if has_client:
             try:
                 tickets_df, _ = load_data({})
             except Exception as e:
                 log(f"DB error loading tickets for Home totals: {e}", "ERROR")
-        overall_client_charts = build_overall_client_charts(client_df, tickets_df) if has_client else {}
+            try:
+                project_df = load_project_data()
+            except Exception as e:
+                log(f"DB error loading projects for Home actual dates: {e}", "ERROR")
+        overall_client_charts = build_overall_client_charts(client_df, tickets_df, project_df) if has_client else {}
         return "tabs/tab_9.html", {**common, "has_client": has_client, "overall_client_charts": overall_client_charts}
 
     if idx == 10:

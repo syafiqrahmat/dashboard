@@ -374,6 +374,7 @@ tbody tr:hover{background:rgba(20,32,50,0.03)}
 .client-section summary::-webkit-details-marker{display:none}
 .client-section summary:hover{background:rgba(44,95,130,0.14)}
 .client-section details{margin-bottom:8px}
+.gantt-title-card-body{padding-top:6px}
 
 /* ---------- Alerts ---------- */
 .alert{
@@ -382,6 +383,10 @@ tbody tr:hover{background:rgba(20,32,50,0.03)}
 }
 .alert-warning{border-color:rgba(194,118,12,0.3);background:rgba(194,118,12,0.08);color:#92400e}
 .alert-info{border-color:rgba(37,99,235,0.3);background:rgba(37,99,235,0.08);color:#1e40af}
+.disclaimer-note{
+  border-radius:var(--radius-sm);padding:10px 14px;margin:0 0 12px;font-size:0.78rem;line-height:1.5;
+  border:1px solid rgba(37,99,235,0.25);background:rgba(37,99,235,0.06);color:#1e3a8a;
+}
 
 .sidebar-hr{margin:0.8rem 0;border:none;border-top:1px solid #d0d5dd}
 hr{border-color:#d0d5dd;margin:1.2rem 0}
@@ -1204,10 +1209,31 @@ function resizeTabCharts(idx) {
     if (gd && gd._fullLayout) { Plotly.Plots.resize(gd); }
   });
 }
+/* Gantt charts on the Project page are hidden inside a collapsed
+   <details class="gantt-title-card"> per module until clicked open --
+   Plotly measures its container at render time, so a chart drawn (or
+   resized by resizeTabCharts above) while its card is still closed comes
+   out zero-size and never fixes itself on its own. Resize it again right
+   when its card opens, once the browser has actually given the now-
+   visible container real dimensions. */
+function wireGanttCards() {
+  document.querySelectorAll('.gantt-title-card').forEach(function(card) {
+    if (card.dataset.ganttWired) return;
+    card.dataset.ganttWired = '1';
+    card.addEventListener('toggle', function() {
+      if (!card.open) return;
+      card.querySelectorAll('.plotly-graph-div').forEach(function(c) {
+        var gd = document.getElementById(c.id);
+        if (gd && gd._fullLayout) { Plotly.Plots.resize(gd); }
+      });
+    });
+  });
+}
 function afterTabLoad(idx) {
   resizeTabCharts(idx);
   applyEndDateBadges();
   wireEditTables();
+  wireGanttCards();
 }
 /* ---------- Lazy tab loading ----------
    Only the tab active on first page load is rendered server-side (see
@@ -1403,7 +1429,9 @@ function escapeHtml(text) {
    and could silently save the wrong date). ---------- */
 var DATE_COLUMNS = [
   'Ticket Created Date', 'Ticket Completed Date', 'Ticket Closed Date',
-  'Start Date', 'End Date', 'Start date', 'Due date', 'Target Date',
+  'Start Date', 'End Date',
+  'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
+  'Actual Start Date', 'Actual End Date',
 ];
 function isDateColumn(col) {
   return DATE_COLUMNS.indexOf(col) !== -1;
@@ -1747,7 +1775,8 @@ var editTables = [
     columns: [
       'Client', 'Title', 'Projek Name', 'Description', 'Category',
       {col: 'Progress', derived: true, placeholder: 'Not Started'},
-      'Priority', 'Start date', 'Due date', 'Target Date',
+      'Priority', 'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
+      'Actual Start Date', 'Actual End Date',
       {col: 'Duration', derived: true, placeholder: ''},
       'Assigned to',
       {col: 'Status Progress', derived: true, placeholder: 'Not Started'},
@@ -1786,6 +1815,7 @@ function wireEditTables() {
   }
 }
 wireEditTables();
+wireGanttCards();
 
 function toggleEdit() { return false; }
 function saveChanges() { return false; }

@@ -31,6 +31,12 @@
     <button class="btn-cancel" id="cancelBtn9" onclick="cancelEdit9()" style="display:none">Cancel</button>
     <button class="btn-edit admin-only" id="editBtn9" onclick="toggleEdit9()">Enable Editing</button>
   </div>
+  <p class="disclaimer-note">
+    <strong>Disclaimer:</strong> Actual Start Date / Actual End Date are computed, not manually entered --
+    they're the earliest Actual Start Date and latest Actual End Date found across that project's tasks in
+    the Project Details table, so they cover the full span even though individual tasks' actual dates vary.
+    A blank cell means no task under that project has an Actual date recorded yet.
+  </p>
   {% if overall_client_charts.status_sections %}
   {% for status, section in overall_client_charts.status_sections.items() %}
   <h3 style="margin-top:18px">{{ status }} ({{ section.count }})</h3>
@@ -61,7 +67,7 @@
             </td>
             {% elif key == 'End Date' and display_val %}
             <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
-            {% elif key in ['Pending', 'In Progress', 'Total Tickets'] %}
+            {% elif key in ['Pending', 'In Progress', 'Total Tickets', 'Actual Start Date', 'Actual End Date'] %}
             <td class="stat-cell" data-col="{{ key }}">{{ display_val }}</td>
             {% else %}
             <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
@@ -104,6 +110,8 @@
             </td>
             {% elif key == 'End Date' and display_val %}
             <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
+            {% elif key in ['Actual Start Date', 'Actual End Date'] %}
+            <td class="stat-cell" data-col="{{ key }}">{{ display_val }}</td>
             {% else %}
             <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
             {% endif %}

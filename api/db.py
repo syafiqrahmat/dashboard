@@ -55,9 +55,12 @@ PROJECT_DB_COLUMNS = [
     ("Category", "category"),
     ("Progress", "progress"),
     ("Priority", "priority"),
-    ("Start date", "start_date"),
-    ("Due date", "due_date"),
-    ("Target Date", "target_date"),
+    ("Plan Start Date", "plan_start_date"),
+    ("Plan End Date", "plan_end_date"),
+    ("Target Start Date", "target_start_date"),
+    ("Target End Date", "target_end_date"),
+    ("Actual Start Date", "actual_start_date"),
+    ("Actual End Date", "actual_end_date"),
     ("Duration", "duration"),
     ("Assigned to", "assigned_to"),
     ("Status Progress", "status_progress"),
@@ -123,6 +126,10 @@ CREATE TABLE IF NOT EXISTS projects (
     status_progress TEXT,
     percentage NUMERIC,
     overall_progress_task NUMERIC,
+    target_start_date DATE,
+    actual_start_date DATE,
+    target_end_date DATE,
+    actual_end_date DATE,
     source_file TEXT,
     dedup_seq INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -134,6 +141,23 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS duration TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS dedup_seq INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS projek_name TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_start_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS actual_start_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_end_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS actual_end_date DATE;
+
+-- Split into three date "types" (Plan/Target/Actual); the old bare
+-- start_date/due_date/target_date columns are retired from the app (see
+-- PROJECT_DB_COLUMNS) but left in place rather than dropped, and their
+-- data is copied forward once here. start_date/due_date always meant
+-- "originally scheduled", so they become Plan Start/End; the old single
+-- target_date becomes Target End Date (it was a one-sided deadline, not
+-- a range). Only fills rows that haven't already been migrated/edited.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_start_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_end_date DATE;
+UPDATE projects SET plan_start_date = start_date WHERE plan_start_date IS NULL AND start_date IS NOT NULL;
+UPDATE projects SET plan_end_date = due_date WHERE plan_end_date IS NULL AND due_date IS NOT NULL;
+UPDATE projects SET target_end_date = target_date WHERE target_end_date IS NULL AND target_date IS NOT NULL;
 
 -- Lets the Project Details table's row/module order be dragged around by
 -- hand instead of being stuck at insertion (id) order. Backfilled from id
@@ -182,8 +206,8 @@ DROP INDEX IF EXISTS idx_projects_dedup_key;
 CREATE UNIQUE INDEX idx_projects_dedup_key ON projects (
     COALESCE(client, ''),
     COALESCE(title, ''),
-    COALESCE(start_date, DATE '0001-01-01'),
-    COALESCE(due_date, DATE '0001-01-01'),
+    COALESCE(plan_start_date, DATE '0001-01-01'),
+    COALESCE(plan_end_date, DATE '0001-01-01'),
     COALESCE(description, ''),
     dedup_seq
 );
@@ -510,7 +534,7 @@ def fetch_projects_df(conn=None):
     df = df.rename(columns=dict(zip(db_cols, display_cols)))
     df = df.rename(columns={"id": "_row_idx", "Source File": "_source_file"})
 
-    for col in ["Start date", "Due date", "Target Date"]:
+    for col in ["Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date", "Actual Start Date", "Actual End Date"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col])
 
