@@ -9,11 +9,6 @@
   <div class="chart-box">{{ project_charts.client_bar|safe }}</div>
   <div class="chart-box">{{ project_charts.status_pie|safe }}</div>
 </div>
-{% if project_charts.timeline_chart %}
-<div class="chart-full"><h3>PROJECT DEVELOPMENT TIMELINE</h3>{{ project_charts.timeline_chart|safe }}</div>
-{% else %}
-<div class="alert alert-warning">No timeline data</div>
-{% endif %}
 <div class="chart-full">
   <h3>Project Details</h3>
   <div class="edit-bar" style="margin-bottom:4px">
@@ -69,6 +64,11 @@
     </table>
   </div>
 </div>
+{% if project_charts.timeline_chart %}
+<div class="chart-full"><h3>PROJECT DEVELOPMENT TIMELINE</h3>{{ project_charts.timeline_chart|safe }}</div>
+{% else %}
+<div class="alert alert-warning">No timeline data</div>
+{% endif %}
 {% else %}
 <div class="alert alert-warning">
   {% if single_client_mode %}
