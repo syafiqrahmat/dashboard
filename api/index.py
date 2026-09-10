@@ -640,8 +640,8 @@ def build_project_charts(df):
 
     display_cols_p = [
         "Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority",
-        "Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date",
-        "Actual Start Date", "Actual End Date", "Duration", "Assigned to",
+        "Actual Start Date", "Actual End Date", "Plan Start Date", "Plan End Date",
+        "Target Start Date", "Target End Date", "Duration", "Assigned to",
         "Status Progress", "Percentage", "Overall Progress Task (%)",
     ]
     avail_p = [c for c in display_cols_p if c in df.columns]
