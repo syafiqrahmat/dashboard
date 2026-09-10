@@ -700,23 +700,24 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
         if c in detail.columns and not detail[c].isna().all():
             detail[c] = detail[c].dt.strftime("%d/%m/%Y")
     detail = detail.fillna("")
-
-    if show_actual_span_cols:
-        # Inserted right after End Date (not appended) so they sit beside
-        # it in the table -- the closest existing "when does this run"
-        # column -- rather than trailing behind Technology/ticket stats.
-        end_date_pos = detail.columns.get_loc("End Date") + 1 if "End Date" in detail.columns else len(detail.columns)
-        detail.insert(end_date_pos, "Actual Start Date", "")
-        detail.insert(end_date_pos + 1, "Actual End Date", "")
-        for i, row in detail.iterrows():
-            span = actual_span_by_project.get((row.get("Client"), row.get("Projek Name")))
-            if span:
-                detail.loc[i, "Actual Start Date"] = span["Actual Start Date"]
-                detail.loc[i, "Actual End Date"] = span["Actual End Date"]
-
     charts["detail_data"] = detail.to_dict("records")
 
     def section_rows(sdf, status):
+        # Actual Start/End Date only makes sense for Development -- a
+        # Warranty/Maintenance row is ongoing support work, not a project
+        # with a start/end to report on, so those sections don't get the
+        # columns at all (not just blank cells).
+        if status == "Development" and show_actual_span_cols:
+            sdf = sdf.copy()
+            end_date_pos = sdf.columns.get_loc("End Date") + 1 if "End Date" in sdf.columns else len(sdf.columns)
+            sdf.insert(end_date_pos, "Actual Start Date", "")
+            sdf.insert(end_date_pos + 1, "Actual End Date", "")
+            for i, row in sdf.iterrows():
+                span = actual_span_by_project.get((row.get("Client"), row.get("Projek Name")))
+                if span:
+                    sdf.loc[i, "Actual Start Date"] = span["Actual Start Date"]
+                    sdf.loc[i, "Actual End Date"] = span["Actual End Date"]
+
         rows = sdf.to_dict("records")
         if status == "Maintenance":
             for row in rows:
