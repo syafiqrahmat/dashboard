@@ -16,6 +16,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <style>
 :root{
   --bg:#eef1f6;
@@ -429,6 +432,13 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 .btn-pill.primary:hover{box-shadow:0 8px 22px rgba(44,95,130,0.42)}
 .btn-pill.danger{color:var(--danger);border-color:rgba(220,38,38,0.3)}
 .btn-pill.danger:hover{background:rgba(220,38,38,0.08)}
+.btn-pill:disabled{opacity:0.65;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+.btn-spinner{
+  display:inline-block;width:12px;height:12px;flex-shrink:0;
+  border:2px solid rgba(0,0,0,0.15);border-top-color:currentColor;border-radius:50%;
+  animation:btn-spin .7s linear infinite;
+}
+@keyframes btn-spin{to{transform:rotate(360deg)}}
 .data-pill{
   font-size:0.72rem;font-weight:600;color:var(--text-dim);padding:6px 12px;border-radius:999px;
   background:rgba(255,255,255,0.6);border:1px solid var(--border);
@@ -1829,6 +1839,608 @@ function cancelEdit3() { return false; }
 function toggleEdit9() { return false; }
 function saveChanges9() { return false; }
 function cancelEdit9() { return false; }
+
+/* ---------- Project PDF report (client-side, pdfmake) ----------
+   Generated entirely in the browser (no server-side PDF dependency, no
+   Node.js involved -- pdfmake + vfs_fonts loaded via CDN in <head>)
+   from /api/project_report_data, which itself is derived purely from
+   existing project fields (no hand-written narrative -- see
+   build_project_report_data in api/index.py). */
+var REPORT_BRAND = { name: 'Software Wizard (M) Sdn Bhd', navy: '#1d3f57', accent: '#2c5f82', teal: '#4fa3b8', success: '#0e9f6e', warning: '#c2760c', danger: '#dc2626', dim: '#5a6579' };
+
+function progressColor(pct) {
+  if (pct >= 100) return REPORT_BRAND.success;
+  if (pct >= 50) return REPORT_BRAND.accent;
+  return REPORT_BRAND.warning;
+}
+
+function reportProgressCell(pct) {
+  pct = Math.max(0, Math.min(100, pct || 0));
+  var w = 130, h = 9;
+  return {
+    columns: [
+      { width: w, canvas: [
+        { type: 'rect', x: 0, y: 0, w: w, h: h, r: 4, color: '#e2e8f0' },
+        { type: 'rect', x: 0, y: 0, w: Math.max(w * pct / 100, pct > 0 ? 6 : 0), h: h, r: 4, color: progressColor(pct) }
+      ] },
+      { width: 8, text: '' },
+      { width: 'auto', text: pct.toFixed(0) + '%', bold: true, fontSize: 9, margin: [0, -1, 0, 0] }
+    ]
+  };
+}
+
+function loadImageDataUrl(url) {
+  return fetch(url)
+    .then(function(r) { return r.blob(); })
+    .then(function(blob) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onloadend = function() { resolve(reader.result); };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    });
+}
+
+function reportFileName(data) {
+  var parts = [data.client, data.projek_name, 'Status_Report'].filter(Boolean);
+  return parts.join('_').replace(/[^a-z0-9_\-]+/gi, '_') + '.pdf';
+}
+
+/* Full-grid bordered table with a zebra-striped body -- reportProgressCell
+   and the header (.th style) supply their own fill, so this only shades
+   the even body rows, and leaves the header's own navy fill alone. */
+function formalTableLayout() {
+  return {
+    hLineWidth: function() { return 0.75; },
+    vLineWidth: function() { return 0.75; },
+    hLineColor: function() { return '#b9c4d0'; },
+    vLineColor: function() { return '#b9c4d0'; },
+    fillColor: function(rowIndex) { return rowIndex === 0 ? null : (rowIndex % 2 === 0 ? '#f3f6f9' : null); },
+    paddingLeft: function() { return 6; },
+    paddingRight: function() { return 6; },
+    paddingTop: function() { return 5; },
+    paddingBottom: function() { return 5; }
+  };
+}
+
+function buildProjectReportDoc(data, logoDataUrl) {
+  var B = REPORT_BRAND;
+  var content = [];
+
+  content.push({
+    stack: [
+      logoDataUrl ? { image: logoDataUrl, width: 200, alignment: 'center' } : { text: '' },
+      { canvas: [{ type: 'line', x1: 240, y1: 0, x2: 315, y2: 0, lineWidth: 1.5, lineColor: B.accent }], margin: [0, 28, 0, 28] },
+      { text: 'PROJECT STATUS REPORT', style: 'coverKicker', alignment: 'center' },
+      { text: data.projek_name || data.client, style: 'coverTitle', alignment: 'center', margin: [0, 12, 0, 0] },
+      { text: data.client, style: 'coverSubtitle', alignment: 'center', margin: [0, 4, 0, 0] },
+      {
+        margin: [70, 56, 70, 0],
+        table: {
+          widths: ['*', '*', '*'],
+          body: [
+            [{ text: 'PROJEK STATUS', style: 'coverLabel' }, { text: 'TECHNOLOGY', style: 'coverLabel' }, { text: 'CONTRACT PERIOD', style: 'coverLabel' }],
+            [{ text: data.projek_status || '-', style: 'coverValue' }, { text: data.technology || '-', style: 'coverValue' }, { text: (data.contract_start || '-') + ' to ' + (data.contract_end || '-'), style: 'coverValue' }]
+          ]
+        },
+        layout: {
+          hLineWidth: function(i) { return (i === 0 || i === 2) ? 0.75 : 0; },
+          vLineWidth: function() { return 0; },
+          hLineColor: function() { return '#1a1a1a'; },
+          paddingTop: function() { return 6; },
+          paddingBottom: function() { return 12; }
+        }
+      }
+    ],
+    margin: [0, 100, 0, 0]
+  });
+  content.push({ text: '', pageBreak: 'after' });
+
+  content.push({ text: 'Executive Summary', style: 'h1' });
+  content.push({
+    columns: [
+      { width: 150, stack: [
+        { text: data.overall_percent.toFixed(0) + '%', style: 'bigStat', color: progressColor(data.overall_percent) },
+        { text: 'Overall Completion', style: 'bigStatLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: (data.modules || []).length + ' module(s) tracked, ' + (data.tasks || []).length + ' task(s) total.', margin: [0, 4, 0, 4] },
+        { text: 'Contract window: ' + (data.contract_start || 'n/a') + ' to ' + (data.contract_end || 'n/a') + '.', color: B.dim, fontSize: 9.5 }
+      ] }
+    ],
+    margin: [0, 8, 0, 16]
+  });
+
+  content.push({ text: 'Module Completion', style: 'h2' });
+  var moduleRows = [[
+    { text: 'Module', style: 'th' }, { text: 'Category', style: 'th' },
+    { text: 'Tasks', style: 'th' }, { text: 'Progress', style: 'th' }
+  ]];
+  (data.modules || []).forEach(function(m) {
+    moduleRows.push([
+      { text: m.title, bold: true },
+      { text: m.category || '-', color: B.dim, fontSize: 9 },
+      { text: String(m.task_count), alignment: 'center' },
+      reportProgressCell(m.overall_percent)
+    ]);
+  });
+  content.push({
+    table: { headerRows: 1, widths: ['*', 'auto', 40, 160], body: moduleRows },
+    layout: formalTableLayout(), margin: [0, 4, 0, 20]
+  });
+
+  content.push({ text: 'Implementation Timeline', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Plan / Target / Actual dates per module, aggregated across that module\'s tasks.', style: 'note', margin: [0, 0, 0, 8] });
+  var timelineRows = [[
+    { text: 'Module', style: 'th' }, { text: 'Plan Start', style: 'th' }, { text: 'Plan End', style: 'th' },
+    { text: 'Target Start', style: 'th' }, { text: 'Target End', style: 'th' },
+    { text: 'Actual Start', style: 'th' }, { text: 'Actual End', style: 'th' }
+  ]];
+  (data.modules || []).forEach(function(m) {
+    timelineRows.push([
+      { text: m.title, bold: true },
+      m.plan_start_date || '-', m.plan_end_date || '-',
+      m.target_start_date || '-', m.target_end_date || '-',
+      m.actual_start_date || '-', m.actual_end_date || '-'
+    ]);
+  });
+  content.push({
+    table: { headerRows: 1, widths: ['*', 60, 60, 60, 60, 60, 60], body: timelineRows },
+    layout: formalTableLayout(), fontSize: 8.5, margin: [0, 0, 0, 20]
+  });
+
+  content.push({ text: 'Team Accountability', style: 'h1', pageBreak: 'before' });
+  var teamRows = [[
+    { text: 'Assigned To', style: 'th' }, { text: 'Modules', style: 'th' },
+    { text: 'Tasks', style: 'th' }, { text: 'Avg Progress', style: 'th' }
+  ]];
+  (data.team || []).forEach(function(t) {
+    teamRows.push([
+      { text: t.name, bold: true },
+      { text: (t.modules || []).join(', ') || '-', color: B.dim, fontSize: 9 },
+      { text: String(t.task_count), alignment: 'center' },
+      t.avg_percent != null ? reportProgressCell(t.avg_percent) : { text: '-' }
+    ]);
+  });
+  content.push({
+    table: { headerRows: 1, widths: ['*', '*', 40, 160], body: teamRows },
+    layout: formalTableLayout(), margin: [0, 4, 0, 20]
+  });
+
+  content.push({ text: 'Attention Needed', style: 'h1', pageBreak: 'before' });
+  var att = data.attention || {};
+  if ((att.low_progress_modules || []).length) {
+    content.push({ text: 'Modules Below 50% Complete', style: 'h2' });
+    content.push({ ul: att.low_progress_modules, margin: [0, 0, 0, 12] });
+  }
+  content.push({ text: 'Overdue Tasks (' + (att.overdue || []).length + ')', style: 'h2' });
+  if ((att.overdue || []).length) {
+    var overdueRows = [[
+      { text: 'Module', style: 'th' }, { text: 'Task', style: 'th' },
+      { text: 'Plan End', style: 'th' }, { text: 'Assigned To', style: 'th' }
+    ]];
+    att.overdue.forEach(function(o) {
+      overdueRows.push([o.title, o.description || '-', { text: o.plan_end, color: B.danger, bold: true }, o.assigned_to || '-']);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 60, '*'], body: overdueRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 16] });
+  } else {
+    content.push({ text: 'None -- no incomplete tasks past their Plan End Date.', color: B.success, margin: [0, 0, 0, 16] });
+  }
+  content.push({ text: 'Upcoming Deadlines, Next 14 Days (' + (att.upcoming || []).length + ')', style: 'h2' });
+  if ((att.upcoming || []).length) {
+    var upcomingRows = [[
+      { text: 'Module', style: 'th' }, { text: 'Task', style: 'th' },
+      { text: 'Plan End', style: 'th' }, { text: 'Assigned To', style: 'th' }
+    ]];
+    att.upcoming.forEach(function(o) {
+      upcomingRows.push([o.title, o.description || '-', o.plan_end, o.assigned_to || '-']);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 60, '*'], body: upcomingRows }, layout: formalTableLayout(), fontSize: 9 });
+  } else {
+    content.push({ text: 'None scheduled in the next 14 days.', color: B.dim });
+  }
+
+  return {
+    pageMargins: [40, 90, 40, 50],
+    background: function(currentPage, pageSize) {
+      var w = pageSize.width, h = pageSize.height;
+      // Cover page: full-bleed top accent bar + bottom band, so the
+      // design uses the whole page instead of a block of centered text
+      // floating in the middle of empty white space.
+      if (currentPage === 1) {
+        var bandH = 86;
+        return {
+          stack: [
+            { canvas: [
+              { type: 'rect', x: 0, y: 0, w: w, h: 5, color: B.accent },
+              { type: 'rect', x: 0, y: h - bandH, w: w, h: bandH, color: '#1a1a1a' }
+            ] },
+            {
+              absolutePosition: { x: 0, y: h - bandH + 22 },
+              columns: [{ width: w, stack: [
+                { text: 'CONFIDENTIAL', color: '#ffffff', bold: true, fontSize: 11, alignment: 'center', characterSpacing: 2 },
+                { text: 'For Internal & Client Distribution Only', color: '#9aa4b0', fontSize: 8.5, alignment: 'center', margin: [0, 4, 0, 0] }
+              ] }]
+            }
+          ]
+        };
+      }
+      // Every other page: the same logo, faint, centered -- matching the
+      // dashboard's own watermark treatment (body::before, low opacity).
+      // The logo crop is wide (~2.27:1), so fit it into a box and center
+      // using its actual scaled height rather than the box's own size,
+      // otherwise it renders pinned to the top of the box instead of
+      // vertically centered on the page.
+      if (!logoDataUrl) return null;
+      var boxSize = Math.min(w, h) * 0.55;
+      var logoAspect = 250 / 110;
+      var logoW = boxSize, logoH = boxSize / logoAspect;
+      return {
+        image: logoDataUrl, fit: [boxSize, boxSize], opacity: 0.05,
+        absolutePosition: { x: (w - logoW) / 2, y: (h - logoH) / 2 }
+      };
+    },
+    header: function(currentPage) {
+      if (currentPage === 1) return null;
+      return {
+        margin: [40, 20, 40, 0],
+        columns: [
+          logoDataUrl ? { image: logoDataUrl, width: 45 } : { text: '' },
+          { text: B.name, margin: [8, 2, 0, 0], fontSize: 9, bold: true, color: B.navy },
+          { text: 'Project Status Report', alignment: 'right', fontSize: 9, color: B.dim }
+        ]
+      };
+    },
+    footer: function(currentPage, pageCount) {
+      if (currentPage === 1) return null;
+      return { text: currentPage + ' / ' + pageCount, alignment: 'center', fontSize: 8, color: B.dim, margin: [0, 10, 0, 0] };
+    },
+    content: content,
+    defaultStyle: { fontSize: 10, color: '#1a1a1a' },
+    styles: {
+      coverKicker: { fontSize: 10.5, bold: true, color: '#5a6b7a', characterSpacing: 2 },
+      coverTitle: { fontSize: 27, bold: true, color: '#1a1a1a' },
+      coverSubtitle: { fontSize: 14, color: B.accent },
+      coverLabel: { fontSize: 8, bold: true, color: '#5a6b7a', characterSpacing: 0.5, alignment: 'center' },
+      coverValue: { fontSize: 11, bold: true, color: '#1a1a1a', margin: [0, 3, 0, 0], alignment: 'center' },
+      h1: { fontSize: 16, bold: true, color: '#1a1a1a', margin: [0, 0, 0, 8] },
+      h2: { fontSize: 12, bold: true, color: B.accent, margin: [0, 4, 0, 6] },
+      th: { bold: true, fontSize: 9, color: '#fff', fillColor: '#1a1a1a' },
+      note: { fontSize: 9, italics: true, color: B.dim },
+      bigStat: { fontSize: 34, bold: true },
+      bigStatLabel: { fontSize: 9, color: B.dim, bold: true }
+    }
+  };
+}
+
+/* Swaps a button's own label for a spinner + status text while a report
+   generates, and restores it afterward -- fetch + doc-building can take
+   a couple of seconds for a large project, so without this the button
+   just sits there looking unresponsive. */
+function setButtonLoading(btn, loadingText) {
+  if (!btn) return null;
+  var original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span> ' + loadingText;
+  return original;
+}
+function restoreButton(btn, original) {
+  if (!btn || original == null) return;
+  btn.disabled = false;
+  btn.innerHTML = original;
+}
+
+function downloadProjectReport(btn) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  var projekName = params.get('projek_name');
+  if (!client) {
+    alert('Select a single client first to generate a project report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PDF...');
+  var url = '/api/project_report_data?client=' + encodeURIComponent(client);
+  if (projekName) url += '&projek_name=' + encodeURIComponent(projekName);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var doc = buildProjectReportDoc(res.data, logoDataUrl);
+      pdfMake.createPdf(doc).download(reportFileName(res.data));
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
+
+/* ---------- Project PPTX report (client-side, PptxGenJS) ----------
+   Same data source as the PDF report (/api/project_report_data), same
+   "derive everything, no hand-written narrative" rule, styled like the
+   card/ring/timeline layout of the reference deck. Generated entirely in
+   the browser via PptxGenJS (CDN, see <head>) -- no server dependency. */
+var PPTX_HEX = { navy: '1A1A1A', accent: '2C5F82', teal: '4FA3B8', success: '0E9F6E', warning: 'C2760C', danger: 'DC2626', dim: '5A6579', border: 'B9C4D0', panel: 'F3F6F9', track: 'E2E8F0' };
+
+function pptxProgressColor(pct) {
+  if (pct >= 100) return PPTX_HEX.success;
+  if (pct >= 50) return PPTX_HEX.accent;
+  return PPTX_HEX.warning;
+}
+
+function pptxParseDate(ddmmyyyy) {
+  var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((ddmmyyyy || '').trim());
+  if (!m) return null;
+  return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+}
+
+function pptxRingSlide(slide, x, y, w, h, pct, title, subtitle) {
+  var d = Math.min(w, h);
+  var ringSize = d * 0.62;
+  var ringX = x + (w - ringSize) / 2;
+  var ringY = y + h * 0.16;
+  var color = pptxProgressColor(pct);
+  slide.addChart('doughnut', [{ name: 'Progress', labels: ['Done', 'Remaining'], values: [pct, Math.max(0, 100 - pct)] }], {
+    x: ringX, y: ringY, w: ringSize, h: ringSize,
+    chartColors: [color, PPTX_HEX.track], holeSize: 72,
+    showLegend: false, showTitle: false, showValue: false, showLabel: false, dataBorder: { pt: 0, color: 'FFFFFF' }
+  });
+  slide.addText(pct.toFixed(0) + '%', { x: ringX, y: ringY + ringSize / 2 - 0.28, w: ringSize, h: 0.5, align: 'center', valign: 'middle', bold: true, fontSize: Math.max(14, ringSize * 13), color: color, fontFace: 'Arial' });
+  slide.addText(title, { x: x, y: ringY + ringSize + 0.06, w: w, h: 0.3, align: 'center', bold: true, fontSize: 11, color: PPTX_HEX.navy, fontFace: 'Arial' });
+  if (subtitle) {
+    slide.addText(subtitle, { x: x, y: ringY + ringSize + 0.34, w: w, h: 0.5, align: 'center', fontSize: 8.5, color: PPTX_HEX.dim, fontFace: 'Arial', valign: 'top' });
+  }
+}
+
+function buildProjectReportPptx(data, logoDataUrl) {
+  var pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  var W = 13.33, H = 7.5;
+  var H_ = PPTX_HEX;
+  pptx.defineSlideMaster({ title: 'SW_BASE', background: { color: 'FFFFFF' } });
+
+  function header(slide, pageLabel) {
+    slide.addShape('rect', { x: 0, y: 0, w: W, h: 0.5, fill: { color: 'FFFFFF' }, line: { type: 'none' } });
+    if (logoDataUrl) slide.addImage({ data: logoDataUrl, x: 0.4, y: 0.12, w: 0.7, h: 0.7 * 110 / 250 });
+    slide.addText(REPORT_BRAND.name, { x: 1.2, y: 0.12, w: 5, h: 0.3, fontSize: 9, bold: true, color: H_.navy, fontFace: 'Arial' });
+    slide.addText(pageLabel || 'Project Status Report', { x: W - 5.4, y: 0.12, w: 5, h: 0.3, align: 'right', fontSize: 9, color: H_.dim, fontFace: 'Arial' });
+    slide.addShape('rect', { x: 0, y: 0.5, w: W, h: 0.015, fill: { color: H_.border }, line: { type: 'none' } });
+  }
+
+  // ---- Slide 1: Cover ----
+  var cover = pptx.addSlide({ masterName: 'SW_BASE' });
+  cover.addShape('rect', { x: 0, y: 0, w: W, h: 0.06, fill: { color: H_.accent }, line: { type: 'none' } });
+  var bandH = 0.85;
+  cover.addShape('rect', { x: 0, y: H - bandH, w: W, h: bandH, fill: { color: H_.navy }, line: { type: 'none' } });
+  cover.addText('CONFIDENTIAL', { x: 0, y: H - bandH + 0.2, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: 'FFFFFF', charSpacing: 3, fontFace: 'Arial' });
+  cover.addText('For Internal & Client Distribution Only', { x: 0, y: H - bandH + 0.5, w: W, h: 0.25, align: 'center', fontSize: 9, color: 'AEB9C4', fontFace: 'Arial' });
+  if (logoDataUrl) {
+    var logoW = 3.4, logoH = logoW * 110 / 250;
+    cover.addImage({ data: logoDataUrl, x: (W - logoW) / 2, y: 0.75, w: logoW, h: logoH });
+  }
+  cover.addShape('rect', { x: W / 2 - 0.5, y: 2.55, w: 1.0, h: 0.018, fill: { color: H_.accent }, line: { type: 'none' } });
+  cover.addText('PROJECT STATUS REPORT', { x: 0, y: 2.75, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: H_.dim, charSpacing: 2.5, fontFace: 'Arial' });
+  cover.addText(data.projek_name || data.client, { x: 0.5, y: 3.1, w: W - 1, h: 0.6, align: 'center', bold: true, fontSize: 30, color: H_.navy, fontFace: 'Arial' });
+  cover.addText(data.client, { x: 0, y: 3.72, w: W, h: 0.4, align: 'center', fontSize: 16, color: H_.accent, fontFace: 'Arial' });
+  var factY = 4.5;
+  cover.addShape('rect', { x: 2.0, y: factY, w: W - 4.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+  var facts = [
+    ['PROJEK STATUS', data.projek_status || '-'],
+    ['TECHNOLOGY', data.technology || '-'],
+    ['CONTRACT PERIOD', (data.contract_start || '-') + ' to ' + (data.contract_end || '-')]
+  ];
+  var factW = (W - 4.0) / 3;
+  facts.forEach(function(f, i) {
+    var fx = 2.0 + i * factW;
+    cover.addText(f[0], { x: fx, y: factY + 0.12, w: factW, h: 0.25, align: 'center', bold: true, fontSize: 8, color: H_.dim, charSpacing: 0.5, fontFace: 'Arial' });
+    cover.addText(f[1], { x: fx, y: factY + 0.38, w: factW, h: 0.35, align: 'center', bold: true, fontSize: 11, color: H_.navy, fontFace: 'Arial' });
+  });
+  cover.addShape('rect', { x: 2.0, y: factY + 0.85, w: W - 4.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+
+  // ---- Slide 2: Executive Summary ----
+  var exec = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(exec);
+  exec.addText('Executive Summary', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var modules = data.modules || [];
+  pptxRingSlide(exec, 0.4, 1.25, 3.0, 2.6, data.overall_percent, 'Overall Completion', modules.length + ' module(s), ' + (data.tasks || []).length + ' task(s)');
+  exec.addText('Contract window: ' + (data.contract_start || 'n/a') + ' to ' + (data.contract_end || 'n/a') + '.', { x: 3.6, y: 1.9, w: 9.2, h: 0.3, fontSize: 10.5, color: H_.dim, fontFace: 'Arial' });
+
+  var shown = modules.slice(0, 4);
+  var cardW = 2.9, cardGap = 0.18, cardsY = 4.15, cardH = 2.9;
+  var totalW = shown.length * cardW + (shown.length - 1) * cardGap;
+  var startX = (W - totalW) / 2;
+  shown.forEach(function(m, i) {
+    var cx = startX + i * (cardW + cardGap);
+    exec.addShape('roundRect', { x: cx, y: cardsY, w: cardW, h: cardH, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: H_.border, width: 0.75 } });
+    pptxRingSlide(exec, cx, cardsY, cardW, cardH, m.overall_percent, m.title, (m.category || '') + '\n' + m.task_count + ' task(s)');
+  });
+  if (modules.length > 4) {
+    exec.addText('+ ' + (modules.length - 4) + ' more module(s) -- see Module Completion table.', { x: 0, y: cardsY + cardH + 0.12, w: W, h: 0.3, align: 'center', italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide 3: Module Completion table ----
+  var modSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(modSlide);
+  modSlide.addText('Module Completion', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var modRows = [[
+    { text: 'Module', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } },
+    { text: 'Category', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } },
+    { text: 'Tasks', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } },
+    { text: 'Progress', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }
+  ]];
+  modules.forEach(function(m, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    modRows.push([
+      { text: m.title, options: { bold: true, fill: { color: zebra } } },
+      { text: m.category || '-', options: { color: H_.dim, fontSize: 9, fill: { color: zebra } } },
+      { text: String(m.task_count), options: { align: 'center', fill: { color: zebra } } },
+      { text: m.overall_percent.toFixed(0) + '%', options: { align: 'center', bold: true, color: pptxProgressColor(m.overall_percent), fill: { color: zebra } } }
+    ]);
+  });
+  modSlide.addTable(modRows, { x: 0.5, y: 1.3, w: W - 1, colW: [(W - 1) * 0.42, (W - 1) * 0.28, (W - 1) * 0.12, (W - 1) * 0.18], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 }, autoPage: true, autoPageLineWeight: 0 });
+
+  // ---- Slide 4: Implementation Timeline ----
+  var tlSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(tlSlide);
+  tlSlide.addText('Implementation Timeline', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  tlSlide.addText('Plan Start/End Date per module, aggregated across that module\'s tasks.', { x: 0.5, y: 1.15, w: 10, h: 0.3, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  var trackX = 3.3, trackW = W - trackX - 0.5;
+  var dateSpans = modules.map(function(m) { return { start: pptxParseDate(m.plan_start_date), end: pptxParseDate(m.plan_end_date) }; }).filter(function(s) { return s.start && s.end; });
+  if (dateSpans.length) {
+    var minDate = new Date(Math.min.apply(null, dateSpans.map(function(s) { return s.start.getTime(); })));
+    var maxDate = new Date(Math.max.apply(null, dateSpans.map(function(s) { return s.end.getTime(); })));
+    var totalMs = Math.max(maxDate.getTime() - minDate.getTime(), 86400000);
+    var rowY = 1.7, rowH = 0.62;
+    // Month gridlines/labels along the top of the track.
+    var monthCursor = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    while (monthCursor <= maxDate) {
+      var frac = (monthCursor.getTime() - minDate.getTime()) / totalMs;
+      var mx = trackX + trackW * Math.max(0, Math.min(1, frac));
+      tlSlide.addShape('line', { x: mx, y: rowY - 0.05, w: 0, h: modules.length * rowH + 0.1, line: { color: H_.border, width: 0.5, dashType: 'dash' } });
+      tlSlide.addText(monthNames[monthCursor.getMonth()] + ' \'' + String(monthCursor.getFullYear()).slice(2), { x: mx - 0.4, y: rowY - 0.32, w: 0.8, h: 0.24, align: 'center', fontSize: 8, color: H_.dim, fontFace: 'Arial' });
+      monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1);
+    }
+    var today = new Date();
+    if (today >= minDate && today <= maxDate) {
+      var tfrac = (today.getTime() - minDate.getTime()) / totalMs;
+      var tx = trackX + trackW * tfrac;
+      tlSlide.addShape('line', { x: tx, y: rowY - 0.05, w: 0, h: modules.length * rowH + 0.1, line: { color: H_.danger, width: 1, dashType: 'dash' } });
+    }
+    modules.forEach(function(m, i) {
+      var y = rowY + i * rowH;
+      tlSlide.addText(m.title, { x: 0.5, y: y, w: trackX - 0.6, h: rowH - 0.1, valign: 'middle', bold: true, fontSize: 10.5, color: H_.navy, fontFace: 'Arial' });
+      tlSlide.addShape('roundRect', { x: trackX, y: y + (rowH - 0.28) / 2, w: trackW, h: 0.28, rectRadius: 0.05, fill: { color: H_.panel }, line: { type: 'none' } });
+      var s = pptxParseDate(m.plan_start_date), e = pptxParseDate(m.plan_end_date);
+      if (s && e) {
+        var sf = Math.max(0, Math.min(1, (s.getTime() - minDate.getTime()) / totalMs));
+        var ef = Math.max(0, Math.min(1, (e.getTime() - minDate.getTime()) / totalMs));
+        var barX = trackX + trackW * sf;
+        var barW = Math.max(trackW * (ef - sf), 0.12);
+        tlSlide.addShape('roundRect', { x: barX, y: y + (rowH - 0.28) / 2, w: barW, h: 0.28, rectRadius: 0.05, fill: { color: pptxProgressColor(m.overall_percent) }, line: { type: 'none' } });
+      }
+    });
+  } else {
+    tlSlide.addText('No Plan Start/End Date data available for this project.', { x: 0.5, y: 1.6, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide(s): Team Accountability ----
+  var team = data.team || [];
+  var perSlide = 6, teamCols = 2, cardW2 = 5.9, cardH2 = 1.35, gapX = 0.3, gapY = 0.22;
+  for (var ti = 0; ti < Math.max(team.length, 1); ti += perSlide) {
+    var chunk = team.slice(ti, ti + perSlide);
+    var tSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(tSlide);
+    tSlide.addText('Team Accountability' + (team.length > perSlide ? ' (' + (ti / perSlide + 1) + '/' + Math.ceil(team.length / perSlide) + ')' : ''), { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    if (!chunk.length) {
+      tSlide.addText('No Assigned To data available.', { x: 0.5, y: 1.5, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+    }
+    chunk.forEach(function(t, i) {
+      var col = i % teamCols, row = Math.floor(i / teamCols);
+      var cx = 0.5 + col * (cardW2 + gapX), cy = 1.4 + row * (cardH2 + gapY);
+      tSlide.addShape('roundRect', { x: cx, y: cy, w: cardW2, h: cardH2, rectRadius: 0.07, fill: { color: 'FFFFFF' }, line: { color: H_.border, width: 0.75 } });
+      tSlide.addText(t.name, { x: cx + 0.18, y: cy + 0.12, w: cardW2 - 1.3, h: 0.35, bold: true, fontSize: 11.5, color: H_.navy, fontFace: 'Arial' });
+      tSlide.addText((t.modules || []).join(', ') || '-', { x: cx + 0.18, y: cy + 0.5, w: cardW2 - 1.3, h: 0.5, fontSize: 9, color: H_.dim, fontFace: 'Arial' });
+      tSlide.addText(t.task_count + ' task(s)', { x: cx + 0.18, y: cy + cardH2 - 0.34, w: cardW2 - 1.3, h: 0.28, fontSize: 8.5, color: H_.dim, fontFace: 'Arial' });
+      if (t.avg_percent != null) {
+        tSlide.addText(t.avg_percent.toFixed(0) + '%', { x: cx + cardW2 - 1.1, y: cy, w: 1.0, h: cardH2, align: 'center', valign: 'middle', bold: true, fontSize: 20, color: pptxProgressColor(t.avg_percent), fontFace: 'Arial' });
+      }
+    });
+  }
+
+  // ---- Slide: Attention Needed (overview) ----
+  var att = data.attention || {};
+  var overdue = att.overdue || [], upcoming = att.upcoming || [], lowMods = att.low_progress_modules || [];
+  var atSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(atSlide);
+  atSlide.addText('Attention Needed', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var summarySentence = lowMods.length
+    ? lowMods.length + ' module(s) below 50% complete (' + lowMods.join(', ') + '). '
+    : 'All modules are at or above 50% complete. ';
+  summarySentence += overdue.length + ' task(s) overdue, ' + upcoming.length + ' due within 14 days.';
+  atSlide.addShape('rect', { x: 0.5, y: 1.35, w: W - 1, h: 0.75, fill: { color: H_.navy }, line: { type: 'none' } });
+  atSlide.addText(summarySentence, { x: 0.7, y: 1.35, w: W - 1.4, h: 0.75, valign: 'middle', fontSize: 12, color: 'FFFFFF', fontFace: 'Arial' });
+  if (lowMods.length) {
+    atSlide.addText('Modules Below 50% Complete', { x: 0.5, y: 2.4, w: 8, h: 0.35, bold: true, fontSize: 13, color: H_.accent, fontFace: 'Arial' });
+    atSlide.addText(lowMods.map(function(m) { return '• ' + m; }).join('\n'), { x: 0.6, y: 2.8, w: W - 1.2, h: 2.5, fontSize: 10.5, color: H_.navy, fontFace: 'Arial', lineSpacingMultiple: 1.4 });
+  }
+
+  // Every overdue/upcoming task listed in full as a real table -- autoPage
+  // lets pptxgenjs spill onto as many extra slides as needed rather than
+  // truncating with a "+N more" note.
+  function attentionTableSlide(title, items, accentColor, emptyMsg) {
+    var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(slide);
+    slide.addText(title, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    if (!items.length) {
+      slide.addText(emptyMsg, { x: 0.5, y: 1.4, w: 10, h: 0.4, bold: true, fontSize: 12, color: H_.success, fontFace: 'Arial' });
+      return;
+    }
+    var rows = [[
+      { text: 'Module', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor } } },
+      { text: 'Task', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor } } },
+      { text: 'Plan End', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor }, align: 'center' } },
+      { text: 'Assigned To', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor } } }
+    ]];
+    items.forEach(function(it, i) {
+      var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+      rows.push([
+        { text: it.title, options: { bold: true, fontSize: 9, fill: { color: zebra } } },
+        { text: it.description || '-', options: { fontSize: 9, fill: { color: zebra } } },
+        { text: it.plan_end, options: { fontSize: 9, align: 'center', bold: true, color: accentColor, fill: { color: zebra } } },
+        { text: it.assigned_to || '-', options: { fontSize: 8.5, color: H_.dim, fill: { color: zebra } } }
+      ]);
+    });
+    slide.addTable(rows, {
+      x: 0.5, y: 1.3, w: W - 1,
+      colW: [(W - 1) * 0.22, (W - 1) * 0.38, (W - 1) * 0.13, (W - 1) * 0.27],
+      fontSize: 9, border: { type: 'solid', color: H_.border, pt: 0.75 },
+      autoPage: true, autoPageRepeatHeader: true, autoPageHeaderRows: 1,
+      newSlideStartY: 0.9, masterSlideName: 'SW_BASE'
+    });
+  }
+  attentionTableSlide('Overdue Tasks (' + overdue.length + ')', overdue, H_.danger, 'None -- no incomplete tasks past their Plan End Date.');
+  attentionTableSlide('Upcoming Deadlines, Next 14 Days (' + upcoming.length + ')', upcoming, H_.accent, 'None scheduled in the next 14 days.');
+
+  return pptx;
+}
+
+function pptxReportFileName(data) {
+  var parts = [data.client, data.projek_name, 'Status_Report'].filter(Boolean);
+  return parts.join('_').replace(/[^a-z0-9_\-]+/gi, '_') + '.pptx';
+}
+
+function downloadProjectReportPptx(btn) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  var projekName = params.get('projek_name');
+  if (!client) {
+    alert('Select a single client first to generate a project report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PPTX...');
+  var url = '/api/project_report_data?client=' + encodeURIComponent(client);
+  if (projekName) url += '&projek_name=' + encodeURIComponent(projekName);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var pptx = buildProjectReportPptx(res.data, logoDataUrl);
+      return pptx.writeFile({ fileName: pptxReportFileName(res.data) });
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
 
 function toggleEdit8() {
   var btn = document.getElementById('editBtn8');

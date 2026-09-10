@@ -364,7 +364,7 @@ def upsert_projects(df, conn=None):
 
     records = _records_for_insert(df, PROJECT_DB_COLUMNS)
     db_cols = [c for _, c in PROJECT_DB_COLUMNS]
-    key_cols = ("client", "title", "start_date", "due_date", "description", "dedup_seq")
+    key_cols = ("client", "title", "plan_start_date", "plan_end_date", "description", "dedup_seq")
     update_cols = [c for c in db_cols if c not in key_cols]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
@@ -376,8 +376,8 @@ def upsert_projects(df, conn=None):
         ON CONFLICT (
             COALESCE(client, ''),
             COALESCE(title, ''),
-            COALESCE(start_date, DATE '0001-01-01'),
-            COALESCE(due_date, DATE '0001-01-01'),
+            COALESCE(plan_start_date, DATE '0001-01-01'),
+            COALESCE(plan_end_date, DATE '0001-01-01'),
             COALESCE(description, ''),
             dedup_seq
         ) DO UPDATE SET
@@ -675,12 +675,12 @@ def insert_project_row(db_values, conn=None):
                 """SELECT COUNT(*) FROM projects
                    WHERE COALESCE(client,'') = COALESCE(%s,'')
                      AND COALESCE(title,'') = COALESCE(%s,'')
-                     AND COALESCE(start_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
-                     AND COALESCE(due_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
+                     AND COALESCE(plan_start_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
+                     AND COALESCE(plan_end_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
                      AND COALESCE(description,'') = COALESCE(%s,'')""",
                 (
                     values.get("client"), values.get("title"),
-                    values.get("start_date"), values.get("due_date"),
+                    values.get("plan_start_date"), values.get("plan_end_date"),
                     values.get("description"),
                 ),
             )

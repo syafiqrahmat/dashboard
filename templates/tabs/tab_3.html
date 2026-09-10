@@ -5,6 +5,13 @@
   <div class="metric-card"><div class="val" style="color:var(--info)">{{ project_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
   <div class="metric-card"><div class="val" style="color:var(--neutral)">{{ project_charts.metrics.not_started }}</div><div class="lbl">Not Started</div></div>
 </div>
+{% if single_client_mode %}
+<div class="edit-bar" style="margin-bottom:14px">
+  <span style="flex:1"></span>
+  <button class="btn-pill" type="button" onclick="downloadProjectReport(this)">&#128196; Download Report (PDF)</button>
+  <button class="btn-pill" type="button" onclick="downloadProjectReportPptx(this)">&#128202; Download Report (PPTX)</button>
+</div>
+{% endif %}
 <div class="chart-row">
   <div class="chart-box">{{ project_charts.client_bar|safe }}</div>
   <div class="chart-box">{{ project_charts.status_pie|safe }}</div>

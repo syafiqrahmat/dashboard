@@ -348,6 +348,40 @@ def recompute_duration(df):
     return df
 
 
+def resolve_project_scope(project_df, filters):
+    """Narrow the full projects table down to whatever (Client, Projek
+    Name) the current filters ask for. Shared by the Project tab and the
+    PDF report endpoint so both scope to a project the exact same way.
+
+    The projects table is independent of the tickets table (no shared
+    filter query), so a client selected via the sidebar/Overall Client
+    table has to be applied here explicitly.
+    """
+    if filters.get("clients") and "Client" in project_df.columns:
+        project_df = project_df[project_df["Client"].isin(filters["clients"])]
+    # Unlike tickets (no real Projek Name field, only a best-effort guess
+    # against Project), projects rows carry Projek Name directly, so this
+    # is an exact match -- still falls back to the unnarrowed set if it
+    # matches nothing, same safety rule as the ticket side.
+    projek_name = filters.get("projek_name")
+    if projek_name and "Projek Name" in project_df.columns and not project_df.empty:
+        narrowed = project_df[project_df["Projek Name"] == projek_name]
+        if not narrowed.empty:
+            project_df = narrowed
+        elif project_df["Projek Name"].isna().all():
+            # Some clients' Client Project sheet rows never carry their
+            # own Projek Name at all (e.g. LKTN) -- there's nothing to
+            # disambiguate against, so it's safe to label every row with
+            # the project that was actually clicked instead of leaving
+            # the column blank. If the client's rows DO carry a
+            # (different, non-matching) Projek Name elsewhere, this
+            # branch is skipped and the unnarrowed set is shown instead,
+            # same safety rule as the ticket side.
+            project_df = project_df.copy()
+            project_df["Projek Name"] = projek_name
+    return project_df
+
+
 def build_project_charts(df):
     charts = {}
     if df.empty:
@@ -625,6 +659,174 @@ def build_project_charts(df):
     charts["detail_data"] = detail_records
 
     return charts
+
+
+def build_project_report_data(client, projek_name):
+    """Aggregate one project's data into the shape the client-side PDF
+    report (pdfmake, see dashboard.html) renders. Everything here is
+    derived straight from existing fields -- module/task rows, dates,
+    Assigned to -- rather than any hand-written narrative, since the
+    database has no field for that. Returns None if nothing matches.
+    """
+    project_df = load_project_data()
+    project_df = resolve_project_scope(project_df, {"clients": [client] if client else [], "projek_name": projek_name})
+    project_df = recompute_status_from_percentage(project_df)
+    project_df = recompute_overall_progress(project_df)
+    project_df = recompute_duration(project_df)
+    if project_df.empty:
+        return None
+
+    resolved_projek_name = projek_name
+    if not resolved_projek_name and "Projek Name" in project_df.columns:
+        non_blank = project_df["Projek Name"].dropna()
+        if not non_blank.empty:
+            resolved_projek_name = non_blank.iloc[0]
+
+    def fmt_date(v):
+        if v is None or pd.isna(v):
+            return None
+        return v.strftime("%d/%m/%Y")
+
+    # Contract-level info (Technology, Projek Status, contract dates) comes
+    # from the Client sheet/table, a separate source from the task-level
+    # Client Project data above.
+    projek_status = technology = contract_start = contract_end = None
+    try:
+        client_df = load_client_data()
+    except Exception:
+        client_df = pd.DataFrame()
+    if not client_df.empty and "Client" in client_df.columns:
+        cdf = client_df[client_df["Client"] == client]
+        if resolved_projek_name and "Projek Name" in cdf.columns:
+            matched = cdf[cdf["Projek Name"] == resolved_projek_name]
+            if not matched.empty:
+                cdf = matched
+        if not cdf.empty:
+            row0 = cdf.iloc[0]
+            projek_status = row0.get("Projek Status")
+            technology = row0.get("Technology")
+            contract_start = fmt_date(row0.get("Start Date"))
+            contract_end = fmt_date(row0.get("End Date"))
+
+    date_cols = ["Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date", "Actual Start Date", "Actual End Date"]
+
+    modules = []
+    if "Title" in project_df.columns:
+        for title in project_df["Title"].dropna().drop_duplicates():
+            tdf = project_df[project_df["Title"] == title]
+            overall = None
+            if "Overall Progress Task (%)" in tdf.columns:
+                ov = pd.to_numeric(tdf["Overall Progress Task (%)"], errors="coerce").dropna()
+                if not ov.empty:
+                    overall = round(float(ov.iloc[0]), 1)
+            if overall is None and "Percentage" in tdf.columns:
+                pct = pd.to_numeric(tdf["Percentage"], errors="coerce").dropna()
+                if not pct.empty:
+                    overall = round(float(pct.mean()), 1)
+            categories = sorted(set(tdf["Category"].dropna().astype(str))) if "Category" in tdf.columns else []
+            assignees = sorted(set(a.strip() for a in tdf["Assigned to"].dropna().astype(str) if a.strip())) if "Assigned to" in tdf.columns else []
+            module = {
+                "title": str(title),
+                "task_count": int(len(tdf)),
+                "overall_percent": overall if overall is not None else 0,
+                "category": categories[0] if len(categories) == 1 else ("Mixed" if len(categories) > 1 else None),
+                "assignees": assignees,
+            }
+            for c in date_cols:
+                key = c.lower().replace(" ", "_")
+                if c not in tdf.columns:
+                    module[key] = None
+                    continue
+                is_start = c.endswith("Start Date")
+                module[key] = fmt_date(tdf[c].min() if is_start else tdf[c].max())
+            modules.append(module)
+
+    overall_percent = round(sum(m["overall_percent"] for m in modules) / len(modules), 1) if modules else 0
+
+    tasks = []
+    for _, row in project_df.iterrows():
+        desc = row.get("Description")
+        desc = str(desc).split("\n")[0].strip()[:160] if pd.notna(desc) else ""
+        pct = row.get("Percentage")
+        tasks.append({
+            "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
+            "description": desc,
+            "category": row.get("Category") if pd.notna(row.get("Category")) else "",
+            "priority": row.get("Priority") if pd.notna(row.get("Priority")) else "",
+            "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
+            "percentage": float(pct) if pd.notna(pct) else None,
+            "status_progress": row.get("Status Progress") if pd.notna(row.get("Status Progress")) else "",
+            "plan_end": fmt_date(row.get("Plan End Date")),
+            "target_end": fmt_date(row.get("Target End Date")),
+            "actual_end": fmt_date(row.get("Actual End Date")),
+        })
+
+    team = {}
+    if "Assigned to" in project_df.columns:
+        for _, row in project_df.iterrows():
+            name = row.get("Assigned to")
+            name = str(name).strip() if pd.notna(name) and str(name).strip() else "Unassigned"
+            entry = team.setdefault(name, {"modules": set(), "task_count": 0, "percentages": []})
+            title = row.get("Title")
+            if pd.notna(title) and str(title).strip():
+                entry["modules"].add(str(title))
+            entry["task_count"] += 1
+            pct = row.get("Percentage")
+            if pd.notna(pct):
+                entry["percentages"].append(float(pct))
+    team_list = [
+        {
+            "name": name,
+            "modules": sorted(entry["modules"]),
+            "task_count": entry["task_count"],
+            "avg_percent": round(sum(entry["percentages"]) / len(entry["percentages"]), 1) if entry["percentages"] else None,
+        }
+        for name, entry in team.items()
+    ]
+    team_list.sort(key=lambda t: t["name"].lower())
+
+    today = pd.Timestamp.now().normalize()
+    overdue, upcoming = [], []
+    if "Plan End Date" in project_df.columns:
+        for _, row in project_df.iterrows():
+            plan_end = row.get("Plan End Date")
+            if pd.isna(plan_end):
+                continue
+            pct = row.get("Percentage")
+            is_done = pd.notna(pct) and float(pct) >= 100
+            if is_done:
+                continue
+            entry = {
+                "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
+                "description": str(row.get("Description")).split("\n")[0].strip()[:120] if pd.notna(row.get("Description")) else "",
+                "plan_end": fmt_date(plan_end),
+                "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
+            }
+            if plan_end < today:
+                overdue.append(entry)
+            elif plan_end <= today + pd.Timedelta(days=14):
+                upcoming.append(entry)
+
+    low_progress_modules = [m["title"] for m in modules if m["overall_percent"] < 50]
+
+    return {
+        "client": client,
+        "projek_name": resolved_projek_name,
+        "projek_status": projek_status,
+        "technology": technology,
+        "contract_start": contract_start,
+        "contract_end": contract_end,
+        "generated_at": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+        "overall_percent": overall_percent,
+        "modules": modules,
+        "tasks": tasks,
+        "team": team_list,
+        "attention": {
+            "overdue": overdue,
+            "upcoming": upcoming,
+            "low_progress_modules": low_progress_modules,
+        },
+    }
 
 
 def build_overall_client_charts(df, tickets_df=None, project_df=None):
@@ -1213,32 +1415,7 @@ def build_tab_context(idx, filters, filter_options, df=None):
         except Exception as e:
             log(f"DB error loading projects: {e}", "ERROR")
             project_df = pd.DataFrame()
-        # The projects table is independent of the tickets table (no shared
-        # filter query), so a client selected via the sidebar/Overall Client
-        # table has to be applied here explicitly to scope the Project tab
-        # to that client.
-        if filters["clients"] and "Client" in project_df.columns:
-            project_df = project_df[project_df["Client"].isin(filters["clients"])]
-        # Unlike tickets (no real Projek Name field, only a best-effort
-        # guess against Project), projects rows carry Projek Name directly,
-        # so this is an exact match -- still falls back to the unnarrowed
-        # set if it matches nothing, same safety rule as the ticket side.
-        projek_name = filters.get("projek_name")
-        if projek_name and "Projek Name" in project_df.columns and not project_df.empty:
-            narrowed = project_df[project_df["Projek Name"] == projek_name]
-            if not narrowed.empty:
-                project_df = narrowed
-            elif project_df["Projek Name"].isna().all():
-                # Some clients' Client Project sheet rows never carry their
-                # own Projek Name at all (e.g. LKTN) -- there's nothing to
-                # disambiguate against, so it's safe to label every row
-                # with the project that was actually clicked instead of
-                # leaving the column blank in the table. If the client's
-                # rows DO carry a (different, non-matching) Projek Name
-                # elsewhere, this branch is skipped and the unnarrowed set
-                # is shown instead, same safety rule as the ticket side.
-                project_df = project_df.copy()
-                project_df["Projek Name"] = projek_name
+        project_df = resolve_project_scope(project_df, filters)
         project_df = recompute_status_from_percentage(project_df)
         project_df = recompute_overall_progress(project_df)
         project_df = recompute_duration(project_df)
@@ -1415,6 +1592,28 @@ def api_tab(idx):
     except Exception as e:
         log(f"Tab {idx} render error: {e}", "ERROR")
         return f"<div class='tab-loading'>Failed to load: {e}</div>", 500
+
+
+@app.route("/api/project_report_data")
+def api_project_report_data():
+    """Feeds the client-side PDF report (pdfmake, built in dashboard.html)
+    -- generation happens entirely in the browser, this just hands back
+    the one project's data as JSON, scoped the same way the Project tab
+    itself is (see resolve_project_scope)."""
+    ensure_schema()
+    client = request.args.get("client") or ""
+    projek_name = request.args.get("projek_name") or None
+    if not client:
+        return jsonify({"success": False, "error": "client is required"}), 400
+    try:
+        data = build_project_report_data(client, projek_name)
+    except Exception as e:
+        log(f"Project report data error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if data is None:
+        label = f"{client} / {projek_name}" if projek_name else client
+        return jsonify({"success": False, "error": f"No project data found for {label}"}), 404
+    return jsonify({"success": True, "data": data})
 
 
 def require_admin():
