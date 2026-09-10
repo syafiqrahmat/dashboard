@@ -1971,18 +1971,18 @@ function buildProjectReportDoc(data, logoDataUrl) {
   });
 
   content.push({ text: 'Implementation Timeline', style: 'h1', pageBreak: 'before' });
-  content.push({ text: 'Plan / Target / Actual dates per module, aggregated across that module\'s tasks.', style: 'note', margin: [0, 0, 0, 8] });
+  content.push({ text: 'Actual / Plan / Target dates per module, aggregated across that module\'s tasks.', style: 'note', margin: [0, 0, 0, 8] });
   var timelineRows = [[
-    { text: 'Module', style: 'th' }, { text: 'Plan Start', style: 'th' }, { text: 'Plan End', style: 'th' },
-    { text: 'Target Start', style: 'th' }, { text: 'Target End', style: 'th' },
-    { text: 'Actual Start', style: 'th' }, { text: 'Actual End', style: 'th' }
+    { text: 'Module', style: 'th' }, { text: 'Actual Start', style: 'th' }, { text: 'Actual End', style: 'th' },
+    { text: 'Plan Start', style: 'th' }, { text: 'Plan End', style: 'th' },
+    { text: 'Target Start', style: 'th' }, { text: 'Target End', style: 'th' }
   ]];
   (data.modules || []).forEach(function(m) {
     timelineRows.push([
       { text: m.title, bold: true },
+      m.actual_start_date || '-', m.actual_end_date || '-',
       m.plan_start_date || '-', m.plan_end_date || '-',
-      m.target_start_date || '-', m.target_end_date || '-',
-      m.actual_start_date || '-', m.actual_end_date || '-'
+      m.target_start_date || '-', m.target_end_date || '-'
     ]);
   });
   content.push({
