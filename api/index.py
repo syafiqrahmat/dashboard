@@ -43,6 +43,14 @@ app.secret_key = os.environ.get("SECRET_KEY", "sw-dashboard-session-signing-key-
 
 PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
+# The Client sheet's row for KUIPS's Warranty project is filed under
+# "UNISIRAJ" (its Projek ID/Name both spell out KUIPS, e.g.
+# "KUIPSSAGA007"/"SAGA KUIPS" -- same entity, inconsistent naming between
+# sheets), while its tickets use Company/Client="KUIPS". Used wherever a
+# Home page client name needs to be translated into the name its ticket
+# data actually uses.
+CLIENT_DISPLAY_ALIASES = {"UNISIRAJ": "KUIPS"}
+
 # Vercel sets this automatically on every deploy -- using it as the
 # service worker's cache-name/version means sw.js's bytes (and therefore
 # its cache) change on every deploy without anyone having to remember to
@@ -288,7 +296,13 @@ def recompute_overall_progress(df):
         basis = basis.dropna()
         return round(basis.mean(), 1) if not basis.empty else None
 
-    overall_by_group = df.groupby(["Client", "Title"]).apply(lambda g: group_overall(g.index), include_groups=False)
+    # A plain dict (not .groupby().apply()) sidesteps a pandas edge case:
+    # when every group's computed value is None -- as happens for a module
+    # with no Percentage data at all, e.g. YIPS's "Outstanding Development"
+    # rows -- .apply() can't decide whether the combined result is a Series
+    # or an empty DataFrame and raises "Data must be 1-dimensional, got
+    # ndarray of shape (0, 0)" instead of just returning all-None.
+    overall_by_group = {key: group_overall(g.index) for key, g in df.groupby(["Client", "Title"])}
     df["Overall Progress Task (%)"] = df.set_index(["Client", "Title"]).index.map(overall_by_group).to_numpy()
     return df
 
@@ -834,19 +848,33 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
     if df.empty:
         return charts
 
-    # Per-client ticket totals for the Maintenance section below. Tickets
-    # aren't reliably linkable to one specific project row (see
+    # Per-client ticket totals for the Maintenance/Warranty sections below.
+    # Tickets aren't reliably linkable to one specific project row (see
     # _narrow_by_projek_name), so this is aggregated per Client rather than
-    # per Projek Name -- a client with two Maintenance rows will show the
-    # same totals on both.
+    # per Projek Name -- a client with two rows in the same section will
+    # show the same totals on both.
+    def ticket_status_stats(statuses):
+        return {
+            "Pending": int((statuses == "Pending").sum()),
+            "In Progress": int((statuses == "In Progress").sum()),
+            "Total Tickets": int(len(statuses)),
+        }
+
     ticket_stats_by_client = {}
+    # Warranty tickets are all bucketed under the shared "Client Warranty"
+    # sentinel Client value, with the real client recorded in Company
+    # instead. That's a *separate* dict (not merged into
+    # ticket_stats_by_client) because a client like MTIB has both regular
+    # and warranty tickets -- its Warranty row needs just the warranty
+    # slice, not the same totals its Maintenance row shows.
+    warranty_ticket_stats_by_company = {}
     if tickets_df is not None and not tickets_df.empty and "Client" in tickets_df.columns and "Ticket Status" in tickets_df.columns:
         for client, statuses in tickets_df.groupby("Client")["Ticket Status"]:
-            ticket_stats_by_client[client] = {
-                "Pending": int((statuses == "Pending").sum()),
-                "In Progress": int((statuses == "In Progress").sum()),
-                "Total Tickets": int(len(statuses)),
-            }
+            ticket_stats_by_client[client] = ticket_status_stats(statuses)
+        if "Company" in tickets_df.columns:
+            warranty_df = tickets_df[tickets_df["Client"] == "Client Warranty"]
+            for company, statuses in warranty_df.groupby("Company")["Ticket Status"]:
+                warranty_ticket_stats_by_company[company] = ticket_status_stats(statuses)
 
     # A project's tasks in the Project Details table each carry their own
     # Actual Start/End Date, which naturally vary from task to task -- there
@@ -862,6 +890,13 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
         and {"Client", "Projek Name", "Actual Start Date", "Actual End Date"}.issubset(project_df.columns)
     )
     actual_span_by_project = {}
+    # Fallback for a client whose Client Project rows never carry their own
+    # Projek Name at all (e.g. LKTN, YIK) -- pandas groupby silently drops
+    # NaN keys, so those clients would otherwise never get an entry above.
+    # Aggregated per Client instead; only safe to use when nothing needs
+    # disambiguating (see the "exactly one Development row" check below),
+    # same rule as resolve_project_scope's Projek Name fallback.
+    actual_span_by_client_fallback = {}
     if show_actual_span_cols:
         for (client, projek_name), pdf in project_df.groupby(["Client", "Projek Name"]):
             start_min = pdf["Actual Start Date"].min()
@@ -869,6 +904,20 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
             if pd.isna(start_min) and pd.isna(end_max):
                 continue
             actual_span_by_project[(client, projek_name)] = {
+                "Actual Start Date": "" if pd.isna(start_min) else start_min.strftime("%d/%m/%Y"),
+                "Actual End Date": "" if pd.isna(end_max) else end_max.strftime("%d/%m/%Y"),
+            }
+        blank_projek_clients = (
+            set(project_df.loc[project_df["Projek Name"].isna(), "Client"])
+            - set(project_df.loc[project_df["Projek Name"].notna(), "Client"])
+        )
+        for client in blank_projek_clients:
+            pdf = project_df[project_df["Client"] == client]
+            start_min = pdf["Actual Start Date"].min()
+            end_max = pdf["Actual End Date"].max()
+            if pd.isna(start_min) and pd.isna(end_max):
+                continue
+            actual_span_by_client_fallback[client] = {
                 "Actual Start Date": "" if pd.isna(start_min) else start_min.strftime("%d/%m/%Y"),
                 "Actual End Date": "" if pd.isna(end_max) else end_max.strftime("%d/%m/%Y"),
             }
@@ -914,16 +963,27 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
             end_date_pos = sdf.columns.get_loc("End Date") + 1 if "End Date" in sdf.columns else len(sdf.columns)
             sdf.insert(end_date_pos, "Actual Start Date", "")
             sdf.insert(end_date_pos + 1, "Actual End Date", "")
+            # A client-only fallback is only safe when there's nothing to
+            # disambiguate -- i.e. this client has exactly one Development
+            # row on the Home page. A client with two (e.g. MARA) keeps
+            # relying on the exact (Client, Projek Name) match only.
+            client_dev_counts = sdf["Client"].value_counts().to_dict()
             for i, row in sdf.iterrows():
-                span = actual_span_by_project.get((row.get("Client"), row.get("Projek Name")))
+                client = row.get("Client")
+                span = actual_span_by_project.get((client, row.get("Projek Name")))
+                if not span and client_dev_counts.get(client) == 1:
+                    span = actual_span_by_client_fallback.get(client)
                 if span:
                     sdf.loc[i, "Actual Start Date"] = span["Actual Start Date"]
                     sdf.loc[i, "Actual End Date"] = span["Actual End Date"]
 
         rows = sdf.to_dict("records")
-        if status == "Maintenance":
+        if status in ("Maintenance", "Warranty"):
+            stats_source = warranty_ticket_stats_by_company if status == "Warranty" else ticket_stats_by_client
             for row in rows:
-                stats = ticket_stats_by_client.get(row.get("Client"), {"Pending": 0, "In Progress": 0, "Total Tickets": 0})
+                client = row.get("Client")
+                lookup_client = CLIENT_DISPLAY_ALIASES.get(client, client)
+                stats = stats_source.get(lookup_client, {"Pending": 0, "In Progress": 0, "Total Tickets": 0})
                 row.update(stats)
             rows.sort(key=lambda r: r["Pending"] + r["In Progress"], reverse=True)
         return rows
@@ -1395,6 +1455,10 @@ def build_tab_context(idx, filters, filter_options, df=None):
         # a Warranty-appropriate dataframe instead, scoped by Company.
         warranty_client = filters["clients"][0] if (single_client_mode and client_category == "Warranty") else None
         if warranty_client:
+            # A Home page client name (e.g. UNISIRAJ) can differ from the
+            # name its own ticket data uses (KUIPS) -- see
+            # CLIENT_DISPLAY_ALIASES.
+            warranty_client = CLIENT_DISPLAY_ALIASES.get(warranty_client, warranty_client)
             try:
                 warranty_df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
             except Exception as e:
