@@ -460,8 +460,8 @@ def build_project_charts(df):
             fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"))
             charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    if "Plan Start Date" in df.columns and "Plan End Date" in df.columns and "Title" in df.columns:
-        valid = df.dropna(subset=["Plan Start Date", "Plan End Date", "Title"]).copy()
+    if "Target Start Date" in df.columns and "Target End Date" in df.columns and "Title" in df.columns:
+        valid = df.dropna(subset=["Target Start Date", "Target End Date", "Title"]).copy()
         valid = valid[valid["Title"].astype(str).str.strip() != ""]
         if "Description" in valid.columns:
             valid["Task Label"] = valid["Description"].astype(str)
@@ -552,7 +552,7 @@ def build_project_charts(df):
                         # elsewhere untouched), so every ~1-day task gets
                         # identical, standardized sizing regardless of
                         # which way it happened to be recorded.
-                        chart_due = cdf["Plan End Date"].where(cdf["Plan End Date"] != cdf["Plan Start Date"], cdf["Plan Start Date"] + pd.Timedelta(days=1))
+                        chart_due = cdf["Target End Date"].where(cdf["Target End Date"] != cdf["Target Start Date"], cdf["Target Start Date"] + pd.Timedelta(days=1))
                         cdf = cdf.assign(**{"Chart Due": chart_due})
 
                         # A short bar does have an actual duration, so it's
@@ -572,7 +572,7 @@ def build_project_charts(df):
                         # >2-day tier that never gets boosted, so relative
                         # ordering is never inverted by the correction
                         # meant to just aid visibility.
-                        span_days = max((cdf["Chart Due"].max() - cdf["Plan Start Date"].min()).days, 1)
+                        span_days = max((cdf["Chart Due"].max() - cdf["Target Start Date"].min()).days, 1)
                         min_bar_ms = min(max(1, round(span_days * 0.015)), 2) * 86400000
 
                         fig = go.Figure()
@@ -580,7 +580,7 @@ def build_project_charts(df):
                             rdf = cdf[cdf[color_col].astype(str) == val]
                             if rdf.empty:
                                 continue
-                            bar_days = (rdf["Chart Due"] - rdf["Plan Start Date"]).dt.days
+                            bar_days = (rdf["Chart Due"] - rdf["Target Start Date"]).dt.days
                             # Thicker vertically (row height) AND given a
                             # visible minimum horizontal length -- short
                             # tasks need to stand out in both directions,
@@ -588,10 +588,10 @@ def build_project_charts(df):
                             # (bar_days <= 1) gets the exact same
                             # standardized thickness/width.
                             bar_widths = bar_days.apply(lambda d: 0.9 if d <= 1 else (0.85 if d <= 2 else 0.7))
-                            bar_ms = (rdf["Chart Due"] - rdf["Plan Start Date"]).dt.total_seconds() * 1000
+                            bar_ms = (rdf["Chart Due"] - rdf["Target Start Date"]).dt.total_seconds() * 1000
                             bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
                             fig.add_trace(go.Bar(
-                                base=rdf["Plan Start Date"],
+                                base=rdf["Target Start Date"],
                                 # A raw pandas Timedelta isn't
                                 # JSON-serializable in every Plotly version
                                 # -- milliseconds (a plain float) is how
@@ -600,7 +600,7 @@ def build_project_charts(df):
                                 x=bar_ms,
                                 y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
                                 name=val, legendgroup=val, marker_color=color_map[val],
-                                customdata=rdf[["Row Label", "Plan Start Date", "Plan End Date"]].astype(str),
+                                customdata=rdf[["Row Label", "Target Start Date", "Target End Date"]].astype(str),
                                 hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
                             ))
 
@@ -771,6 +771,7 @@ def build_project_report_data(client, projek_name):
             "percentage": float(pct) if pd.notna(pct) else None,
             "status_progress": row.get("Status Progress") if pd.notna(row.get("Status Progress")) else "",
             "plan_end": fmt_date(row.get("Plan End Date")),
+            "target_start": fmt_date(row.get("Target Start Date")),
             "target_end": fmt_date(row.get("Target End Date")),
             "actual_end": fmt_date(row.get("Actual End Date")),
         })
@@ -801,10 +802,15 @@ def build_project_report_data(client, projek_name):
 
     today = pd.Timestamp.now().normalize()
     overdue, upcoming = [], []
-    if "Plan End Date" in project_df.columns:
+    has_plan_end = "Plan End Date" in project_df.columns
+    has_target_end = "Target End Date" in project_df.columns
+    if has_plan_end or has_target_end:
         for _, row in project_df.iterrows():
-            plan_end = row.get("Plan End Date")
-            if pd.isna(plan_end):
+            plan_end = row.get("Plan End Date") if has_plan_end else None
+            target_end = row.get("Target End Date") if has_target_end else None
+            plan_end = None if pd.isna(plan_end) else plan_end
+            target_end = None if pd.isna(target_end) else target_end
+            if plan_end is None and target_end is None:
                 continue
             pct = row.get("Percentage")
             is_done = pd.notna(pct) and float(pct) >= 100
@@ -814,14 +820,51 @@ def build_project_report_data(client, projek_name):
                 "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
                 "description": str(row.get("Description")).split("\n")[0].strip()[:120] if pd.notna(row.get("Description")) else "",
                 "plan_end": fmt_date(plan_end),
+                "target_end": fmt_date(target_end),
                 "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
             }
-            if plan_end < today:
+            # A task is overdue the moment either its Plan End or its Target
+            # End has already passed -- Target End slipping past today is
+            # just as much a red flag as Plan End slipping, even if Plan
+            # End itself is still in the future.
+            if (plan_end is not None and plan_end < today) or (target_end is not None and target_end < today):
                 overdue.append(entry)
-            elif plan_end <= today + pd.Timedelta(days=14):
-                upcoming.append(entry)
+            else:
+                soonest = min(d for d in (plan_end, target_end) if d is not None)
+                if soonest <= today + pd.Timedelta(days=14):
+                    upcoming.append(entry)
 
     low_progress_modules = [m["title"] for m in modules if m["overall_percent"] < 50]
+
+    # Schedule slippage: how many days a task's Target End Date has moved
+    # past its original Plan End Date. This is independent of whether the
+    # task is overdue today -- a task can have already slipped from the
+    # plan while its (revised) target is still comfortably in the future.
+    slippage = []
+    if has_plan_end and has_target_end:
+        for _, row in project_df.iterrows():
+            plan_end = row.get("Plan End Date")
+            target_end = row.get("Target End Date")
+            if pd.isna(plan_end) or pd.isna(target_end):
+                continue
+            days = (target_end - plan_end).days
+            if days <= 0:
+                continue
+            slippage.append({
+                "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
+                "description": str(row.get("Description")).split("\n")[0].strip()[:120] if pd.notna(row.get("Description")) else "",
+                "plan_end": fmt_date(plan_end),
+                "target_end": fmt_date(target_end),
+                "slippage_days": int(days),
+                "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
+            })
+    slippage.sort(key=lambda s: s["slippage_days"], reverse=True)
+
+    # At-risk modules: below 50% complete AND already has at least one
+    # overdue task -- behind schedule with little buffer left to recover,
+    # as distinct from a module that is merely slow but not yet late.
+    overdue_module_titles = {o["title"] for o in overdue}
+    at_risk_modules = [m["title"] for m in modules if m["overall_percent"] < 50 and m["title"] in overdue_module_titles]
 
     return {
         "client": client,
@@ -839,6 +882,8 @@ def build_project_report_data(client, projek_name):
             "overdue": overdue,
             "upcoming": upcoming,
             "low_progress_modules": low_progress_modules,
+            "slippage": slippage,
+            "at_risk_modules": at_risk_modules,
         },
     }
 
