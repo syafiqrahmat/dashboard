@@ -1835,6 +1835,14 @@ def api_upload():
         conn = request_conn()
         try:
             ins_p, upd_p = db.upsert_projects(parsed_p, conn=conn)
+            # A brand-new task row (e.g. this module gained tasks since the
+            # last upload) lands with no sort_order of its own, which would
+            # otherwise put it at the very end of the whole table instead
+            # of next to the rest of its module -- see
+            # renumber_projects_sort_order()'s docstring for why that
+            # splits a module into two separate-looking groups on the
+            # Project Details page.
+            db.renumber_projects_sort_order(conn=conn)
             conn.commit()
             summary["projects_inserted"] += ins_p
             summary["projects_updated"] += upd_p

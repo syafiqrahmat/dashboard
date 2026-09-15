@@ -245,6 +245,11 @@ def parse_ticket_sheet(df, client, source_file):
         df["Client"] = client
     else:
         df["Client"] = df["Client"].fillna(client)
+    # Client identity is matched by exact string everywhere downstream
+    # (filters, per-client ticket totals, report lookups) -- strip stray
+    # whitespace so a sheet's own Client column can't silently split into
+    # a second, invisible-looking client bucket.
+    df["Client"] = df["Client"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
     df["Source File"] = source_file
 
     # A client's own ticket sheet can mix warranty-period tickets in with
@@ -356,6 +361,23 @@ def parse_project_sheet(df, source_file):
         df["Client"] = df["Client"].ffill()
     df["Source File"] = source_file
 
+    # Module grouping everywhere downstream (the Home/Project pages, and
+    # the PDF/PPTX reports) matches rows to a module by exact Title string
+    # equality -- so a re-upload where the same module got retyped with a
+    # trailing space, doubled internal space, or different capitalization
+    # (trivially easy in Excel: autocorrect, copy-paste, a re-typed header)
+    # silently creates a second, separate module group instead of merging
+    # into the existing one. Normalize whitespace and casing here, once, at
+    # the only place new data enters the system, rather than requiring
+    # every consumer to normalize before comparing.
+    for norm_col in ("Title", "Client"):
+        if norm_col in df.columns:
+            has_value = df[norm_col].notna()
+            df.loc[has_value, norm_col] = (
+                df.loc[has_value, norm_col].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+            )
+            df.loc[df[norm_col] == "", norm_col] = None
+
     # A project's Title, and every other block-level field (Category,
     # Priority, dates, Assigned to, Status Progress, the overall
     # percentages...) only appear on the row where that task starts.
@@ -449,6 +471,7 @@ def parse_client_sheet(df, source_file):
 
     if "Client" in df.columns:
         df["Client"] = df["Client"].ffill()
+        df["Client"] = df["Client"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
 
     for c in ["Start Date", "End Date"]:
         if c in df.columns:

@@ -407,6 +407,59 @@ def upsert_projects(df, conn=None, sync_columns=None):
     return inserted, updated
 
 
+def renumber_projects_sort_order(conn=None):
+    """Re-group any project rows that share a (Client, Title) module but
+    have drifted apart in sort_order back into one contiguous block.
+
+    upsert_projects() intentionally leaves a brand-new row's sort_order
+    unset -- SCHEMA_SQL's `UPDATE projects SET sort_order = id WHERE
+    sort_order IS NULL` (which reruns on every app startup, see
+    init_schema()) then "heals" it to that row's own id, which is always
+    higher than everything already there. A module whose sheet gained
+    extra tasks in a later upload therefore has its new tasks land at the
+    very end of the whole table instead of next to the rest of that
+    module -- and the Project Details page's Overall Progress Task (%)
+    merged-cell rendering (see build_project_charts() in index.py) only
+    merges *contiguous* same-(Client, Title) rows, so the module then
+    displays as two separate groups.
+
+    Fixes this generally, independent of insert/update history: read the
+    table in its current (possibly split) order, stable-sort every row to
+    the position of its (Client, Title) group's *first* appearance, then
+    renumber sequentially. A module that's still all in one place is
+    left exactly where it was; a module split by a later upload gets its
+    late-arriving rows pulled back to sit right after their siblings.
+    Call this once after any project upsert so this can't recur.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT id, client, title FROM projects ORDER BY sort_order NULLS LAST, id")
+            rows = cur.fetchall()
+            if not rows:
+                return
+
+            group_first_pos = {}
+            for pos, (row_id, client, title) in enumerate(rows):
+                key = (client, title)
+                if key not in group_first_pos:
+                    group_first_pos[key] = pos
+
+            indexed = list(enumerate(rows))
+            indexed.sort(key=lambda item: (group_first_pos[(item[1][1], item[1][2])], item[0]))
+
+            updates = [(new_order + 1, row_id) for new_order, (_, (row_id, _, _)) in enumerate(indexed)]
+            # Not touching updated_at here -- this is purely a display-order
+            # repair, not a change to the row's actual data, and bumping it
+            # for every project on every upload would falsely make
+            # everything look freshly edited.
+            psycopg2.extras.execute_values(
+                cur,
+                "UPDATE projects AS p SET sort_order = v.new_order "
+                "FROM (VALUES %s) AS v(new_order, id) WHERE p.id = v.id",
+                updates, page_size=500,
+            )
+
+
 def upsert_clients(df, conn=None, sync_columns=None):
     """Insert new client rows / update existing ones (matched by client + projek id).
 
