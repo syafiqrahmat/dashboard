@@ -21,6 +21,7 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env.local"), override=True)
 
 import db
+import mysupport_sync
 from data_utils import (
     COLORS, PRIORITY_COLORS, AGEING_COLORS,
     parse_ticket_sheet, parse_project_sheet, parse_client_sheet, detect_ticket_sheets,
@@ -1729,6 +1730,22 @@ def require_admin():
     return session.get("role") == "admin"
 
 
+def require_cron_or_admin():
+    """Admin session (manual "Sync now" button) OR Vercel Cron's own auth.
+
+    Vercel Cron calls the endpoint with no session cookie, but -- as long
+    as the CRON_SECRET env var is set on the project -- automatically adds
+    `Authorization: Bearer <CRON_SECRET>` to the request, so that's what
+    authenticates the scheduled path instead.
+    """
+    if require_admin():
+        return True
+    secret = os.environ.get("CRON_SECRET")
+    if not secret:
+        return False
+    return request.headers.get("Authorization") == f"Bearer {secret}"
+
+
 @app.route("/api/login", methods=["POST"])
 def api_login():
     ensure_schema()
@@ -1916,6 +1933,69 @@ def api_restart():
     except Exception as e:
         log(f"Restart error: {e}", "ERROR")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/sync_mysupport", methods=["GET", "POST"])
+def api_sync_mysupport():
+    """Pull tickets/projects/clients from the live mysupport MySQL DB and
+    merge them into Postgres. Only overwrites the columns mysupport has
+    data for (see mysupport_sync.*_SYNC_COLUMNS) -- Priority, SLA fields,
+    Progress %, planned/actual dates, Assigned To, etc. are left exactly
+    as they are, since mysupport has no equivalent for those.
+
+    Triggered either by the "Sync from mysupport" button (admin session)
+    or by the Vercel Cron schedule (see vercel.json), which is why this
+    accepts GET too and checks require_cron_or_admin() instead of just
+    require_admin().
+    """
+    if not require_cron_or_admin():
+        return jsonify({"success": False, "error": "Admin login or cron secret required"}), 403
+    ensure_schema()
+
+    summary = {"tickets_inserted": 0, "tickets_updated": 0,
+               "projects_inserted": 0, "projects_updated": 0,
+               "clients_inserted": 0, "clients_updated": 0, "errors": []}
+
+    try:
+        mysupport_conn = mysupport_sync.get_mysupport_conn()
+    except Exception as e:
+        log(f"mysupport sync: connection failed: {e}", "ERROR")
+        return jsonify({"success": False, "error": f"Could not connect to mysupport: {e}"}), 502
+
+    try:
+        try:
+            tickets_df = mysupport_sync.fetch_mysupport_tickets_df(conn=mysupport_conn)
+            ins, upd = db.upsert_tickets(
+                tickets_df, conn=request_conn(), sync_columns=mysupport_sync.TICKET_SYNC_COLUMNS,
+            )
+            request_conn().commit()
+            summary["tickets_inserted"] += ins
+            summary["tickets_updated"] += upd
+        except Exception as e:
+            request_conn().rollback()
+            log(f"mysupport sync: tickets failed: {e}", "ERROR")
+            summary["errors"].append(f"tickets: {str(e)[:300]}")
+
+        # NOTE: syncing into Postgres `projects` is intentionally disabled --
+        # see the comment on mysupport_sync.fetch_mysupport_projects_df().
+        # Postgres `projects` holds one row per *module/task line* (title,
+        # description, plan/target/actual dates), which mysupport's
+        # `projects` table (one row per project, no dates/description) does
+        # not map onto without picking a source for those rows (tasks?
+        # progress?) that hasn't been decided yet.
+
+        # NOTE: syncing into Postgres `clients` is also intentionally
+        # disabled -- see the comment on mysupport_sync.fetch_mysupport_clients_df().
+        # It's a small, manually-curated set of Development/Warranty/
+        # Maintenance engagement rows per client, not a raw project catalog;
+        # this used to insert one row per mysupport project (15+ per client)
+        # and every one of them displayed that client's *entire* ticket
+        # total on the Home page, making totals look wildly inflated.
+    finally:
+        mysupport_conn.close()
+
+    summary["success"] = len(summary["errors"]) == 0
+    return jsonify(summary)
 
 
 @app.route("/api/status")

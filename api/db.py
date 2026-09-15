@@ -327,8 +327,15 @@ def _records_for_insert(df, columns):
     return list(df.itertuples(index=False, name=None))
 
 
-def upsert_tickets(df, conn=None):
+def upsert_tickets(df, conn=None, sync_columns=None):
     """Insert new tickets / update existing ones (matched by client + ticket no).
+
+    `sync_columns`, when given, restricts which non-key columns get
+    overwritten on an existing row (used by the mysupport sync, which only
+    has data for a subset of fields -- Priority/SLA/Ageing/etc. are left
+    exactly as they are instead of being blanked out). Defaults to every
+    mapped column, i.e. the original full-overwrite behavior used by the
+    manual Excel/CSV upload.
 
     Returns (inserted_count, updated_count).
     """
@@ -338,6 +345,8 @@ def upsert_tickets(df, conn=None):
     records = _records_for_insert(df, TICKET_DB_COLUMNS)
     db_cols = [c for _, c in TICKET_DB_COLUMNS]
     update_cols = [c for c in db_cols if c not in ("client", "ticket_no")]
+    if sync_columns is not None:
+        update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     sql = f"""
@@ -358,7 +367,8 @@ def upsert_tickets(df, conn=None):
     return inserted, updated
 
 
-def upsert_projects(df, conn=None):
+def upsert_projects(df, conn=None, sync_columns=None):
+    """See upsert_tickets() for what `sync_columns` does."""
     if df.empty:
         return 0, 0
 
@@ -366,6 +376,8 @@ def upsert_projects(df, conn=None):
     db_cols = [c for _, c in PROJECT_DB_COLUMNS]
     key_cols = ("client", "title", "plan_start_date", "plan_end_date", "description", "dedup_seq")
     update_cols = [c for c in db_cols if c not in key_cols]
+    if sync_columns is not None:
+        update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     # Must match idx_projects_dedup_key's expressions exactly for
@@ -395,8 +407,10 @@ def upsert_projects(df, conn=None):
     return inserted, updated
 
 
-def upsert_clients(df, conn=None):
+def upsert_clients(df, conn=None, sync_columns=None):
     """Insert new client rows / update existing ones (matched by client + projek id).
+
+    See upsert_tickets() for what `sync_columns` does.
 
     Returns (inserted_count, updated_count).
     """
@@ -406,6 +420,8 @@ def upsert_clients(df, conn=None):
     records = _records_for_insert(df, CLIENT_DB_COLUMNS)
     db_cols = [c for _, c in CLIENT_DB_COLUMNS]
     update_cols = [c for c in db_cols if c not in ("client", "projek_id")]
+    if sync_columns is not None:
+        update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     sql = f"""

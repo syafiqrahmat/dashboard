@@ -4,5 +4,8 @@
       "maxDuration": 60,
       "includeFiles": "{templates/**,static/**,sw.svg,sw.js,manifest.json}"
     }
-  }
+  },
+  "crons": [
+    { "path": "/api/sync_mysupport", "schedule": "0 2 * * *" }
+  ]
 }

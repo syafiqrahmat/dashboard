@@ -4,3 +4,4 @@ plotly==6.9.0
 openpyxl>=3.0
 psycopg2-binary>=2.9
 python-dotenv>=1.0
+pymysql>=1.1

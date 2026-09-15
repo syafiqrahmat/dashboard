@@ -681,6 +681,7 @@ body.role-admin .viewer-only-note{display:none}
     </button>
     <button type="button" class="btn-pill" onclick="refreshWithSplash()">&#10227; Refresh</button>
     <button type="button" class="btn-pill primary admin-only" onclick="openUploadModal()">&#8593; Upload Data</button>
+    <button type="button" class="btn-pill admin-only" id="syncMysupportBtn" onclick="doSyncMysupport()">&#8635; Sync from mysupport</button>
     <button type="button" class="btn-pill danger admin-only" onclick="openRestartModal()">&#8635; Reset Database</button>
     <button type="button" class="btn-pill" id="installAppBtn" onclick="installApp()" style="display:none">&#8615; Install App</button>
     <button type="button" class="btn-pill" id="roleSwitchBtn" onclick="openRoleModal()">&#9881;&#65039; <span id="roleSwitchLabel">Role</span></button>
@@ -3188,6 +3189,35 @@ function doUpload() {
       document.getElementById('uploadProgress').style.display = 'none';
       document.getElementById('uploadResult').innerHTML = '<div class="row-err">Upload failed: ' + escapeHtml(e.message) + '</div>';
       document.getElementById('uploadSubmitBtn').disabled = false;
+    });
+}
+
+/* ---------- Sync from mysupport ---------- */
+function doSyncMysupport() {
+  var btn = document.getElementById('syncMysupportBtn');
+  var originalLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '&#8635; Syncing&hellip;';
+
+  fetch('/api/sync_mysupport', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel;
+      if (result.success) {
+        var msg = result.tickets_inserted + ' new ticket(s), ' + result.tickets_updated + ' updated' +
+          ' &middot; ' + result.projects_inserted + ' new project(s), ' + result.projects_updated + ' updated';
+        showToast('Synced from mysupport: ' + msg, 'success');
+        setTimeout(function() { window.location.reload(); }, 1400);
+      } else {
+        var errText = (result.errors && result.errors.length) ? result.errors.join('; ') : (result.error || 'unknown error');
+        showToast('Sync finished with errors: ' + errText, 'error');
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel;
+      showToast('Sync failed: ' + e.message, 'error');
     });
 }
 
