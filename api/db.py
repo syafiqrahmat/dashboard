@@ -7,6 +7,7 @@ are matched by a natural key and updated in place, new rows are inserted,
 nothing is ever silently overwritten by an older file.
 """
 import os
+import re
 import warnings
 from contextlib import contextmanager
 
@@ -423,31 +424,48 @@ def renumber_projects_sort_order(conn=None):
     merges *contiguous* same-(Client, Title) rows, so the module then
     displays as two separate groups.
 
+    Also re-sorts *within* each module by the leading number in
+    Description (e.g. "9. Integrasi..." before "10. Doc UAT..." before
+    "12. FAT..."), instead of upload/arrival order -- a later upload's
+    rows land after the module's existing ones (see above), which
+    otherwise leaves e.g. "12. FAT" sitting before "13. Training" and
+    "14. Go Live" but ahead of "10."/"11." simply because 10-14 came from
+    an earlier upload than 12 did. Plain arrival order is kept as the
+    fallback for a description with no leading number, so nothing
+    disappears or gets pushed somewhere arbitrary.
+
     Fixes this generally, independent of insert/update history: read the
-    table in its current (possibly split) order, stable-sort every row to
-    the position of its (Client, Title) group's *first* appearance, then
-    renumber sequentially. A module that's still all in one place is
-    left exactly where it was; a module split by a later upload gets its
-    late-arriving rows pulled back to sit right after their siblings.
-    Call this once after any project upsert so this can't recur.
+    table in its current (possibly split/misordered) order, stable-sort
+    every row to (a) the position of its (Client, Title) group's *first*
+    appearance, then (b) its own leading Description number if it has
+    one, then renumber sequentially. A module that's already contiguous
+    and numerically ordered is left exactly where it was. Call this once
+    after any project upsert so neither problem can recur.
     """
     with db_connection(conn) as c:
         with c.cursor() as cur:
-            cur.execute("SELECT id, client, title FROM projects ORDER BY sort_order NULLS LAST, id")
+            cur.execute("SELECT id, client, title, description FROM projects ORDER BY sort_order NULLS LAST, id")
             rows = cur.fetchall()
             if not rows:
                 return
 
             group_first_pos = {}
-            for pos, (row_id, client, title) in enumerate(rows):
+            for pos, (row_id, client, title, description) in enumerate(rows):
                 key = (client, title)
                 if key not in group_first_pos:
                     group_first_pos[key] = pos
 
-            indexed = list(enumerate(rows))
-            indexed.sort(key=lambda item: (group_first_pos[(item[1][1], item[1][2])], item[0]))
+            def desc_number(description):
+                m = re.match(r"\s*(\d+)\s*\.", description or "")
+                return int(m.group(1)) if m else None
 
-            updates = [(new_order + 1, row_id) for new_order, (_, (row_id, _, _)) in enumerate(indexed)]
+            indexed = list(enumerate(rows))
+            indexed.sort(key=lambda item: (
+                group_first_pos[(item[1][1], item[1][2])],
+                (0, desc_number(item[1][3])) if desc_number(item[1][3]) is not None else (1, item[0]),
+            ))
+
+            updates = [(new_order + 1, row_id) for new_order, (_, (row_id, _, _, _)) in enumerate(indexed)]
             # Not touching updated_at here -- this is purely a display-order
             # repair, not a change to the row's actual data, and bumping it
             # for every project on every upload would falsely make
