@@ -3026,6 +3026,632 @@ function downloadProjectReportPptx(btn) {
   });
 }
 
+/* ---------- Warranty / Maintenance ticket PDF + PPTX report ----------
+   Same "derive everything from existing fields, no hand-written
+   narrative" rule as the Project report above, from /api/ticket_report_data
+   (built by build_ticket_report_data in api/index.py). Shares
+   REPORT_BRAND/PPTX_HEX, formalTableLayout, loadImageDataUrl,
+   setButtonLoading/restoreButton and the reportDatePassed-style helpers
+   with the project report rather than redefining them. */
+function ticketStatusColor(status) {
+  var B = REPORT_BRAND;
+  if (status === 'Completed' || status === 'Closed') return B.success;
+  if (status === 'Pending') return B.warning;
+  if (status === 'In Progress') return B.accent;
+  return B.dim;
+}
+function ticketPriorityColor(priority) {
+  var B = REPORT_BRAND;
+  var p = (priority || '').toLowerCase();
+  if (p.indexOf('high') !== -1 || p.indexOf('critical') !== -1 || p.indexOf('urgent') !== -1) return B.danger;
+  if (p.indexOf('medium') !== -1) return B.warning;
+  return B.dim;
+}
+
+/* Horizontal count bar for the ticket report's analytics tables (monthly
+   trend, ageing buckets) -- same visual language as reportProgressCell,
+   but scaled against a caller-supplied max count instead of a fixed 0-100
+   percentage, since these are raw ticket counts, not percentages. */
+function pdfCountBar(count, maxCount, color) {
+  var w = 130, h = 9;
+  var barW = maxCount > 0 ? Math.max(w * count / maxCount, count > 0 ? 4 : 0) : 0;
+  return {
+    columns: [
+      { width: w, canvas: [
+        { type: 'rect', x: 0, y: 0, w: w, h: h, r: 4, color: '#e2e8f0' },
+        { type: 'rect', x: 0, y: 0, w: barW, h: h, r: 4, color: color }
+      ] },
+      { width: 8, text: '' },
+      { width: 'auto', text: String(count), bold: true, fontSize: 9, margin: [0, -1, 0, 0] }
+    ]
+  };
+}
+
+/* Blends a hex color toward white by (1 - intensity) -- used as a light
+   heatmap tint behind a pivot-table cell's number (0 = white, 1 = full
+   color), so the Monthly Trend by Project table reads at a glance without
+   needing an actual chart per project. */
+function shadeColor(hex, intensity) {
+  intensity = Math.max(0, Math.min(1, intensity));
+  var n = parseInt(hex.replace('#', ''), 16);
+  var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  var mix = function(c) { return Math.round(255 + (c - 255) * (0.15 + intensity * 0.55)); };
+  var toHex = function(c) { return mix(c).toString(16).padStart(2, '0'); };
+  return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+
+function ticketReportFileName(data, ext) {
+  var parts = [data.client, data.category, 'Status_Report'].filter(Boolean);
+  return parts.join('_').replace(/[^a-z0-9_\-]+/gi, '_') + '.' + ext;
+}
+
+function buildTicketReportDoc(data, logoDataUrl) {
+  var B = REPORT_BRAND;
+  var m = data.metrics || {};
+  var content = [];
+
+  content.push({
+    stack: [
+      logoDataUrl ? { image: logoDataUrl, width: 200, alignment: 'center' } : { text: '' },
+      { canvas: [{ type: 'line', x1: 240, y1: 0, x2: 315, y2: 0, lineWidth: 1.5, lineColor: B.accent }], margin: [0, 28, 0, 28] },
+      { text: (data.category || 'TICKET').toUpperCase() + ' STATUS REPORT', style: 'coverKicker', alignment: 'center' },
+      { text: data.client, style: 'coverTitle', alignment: 'center', margin: [0, 12, 0, 0] },
+      { text: data.category, style: 'coverSubtitle', alignment: 'center', margin: [0, 4, 0, 0] },
+      {
+        margin: [50, 56, 50, 0],
+        table: {
+          widths: ['*', '*', '*', '*'],
+          body: [
+            [{ text: 'TOTAL TICKETS', style: 'coverLabel' }, { text: 'COMPLETED', style: 'coverLabel' }, { text: 'OPEN', style: 'coverLabel' }, { text: 'SLA BREACHES', style: 'coverLabel' }],
+            [{ text: String(m.total || 0), style: 'coverValue' }, { text: String(m.completed || 0), style: 'coverValue' }, { text: String((m.pending || 0) + (m.in_progress || 0)), style: 'coverValue' }, { text: String(m.sla_breach || 0), style: 'coverValue', color: (m.sla_breach || 0) > 0 ? B.danger : '#1a1a1a' }]
+          ]
+        },
+        layout: {
+          hLineWidth: function(i) { return (i === 0 || i === 2) ? 0.75 : 0; },
+          vLineWidth: function() { return 0; },
+          hLineColor: function() { return '#1a1a1a'; },
+          paddingTop: function() { return 6; },
+          paddingBottom: function() { return 12; }
+        }
+      }
+    ],
+    margin: [0, 100, 0, 0]
+  });
+  content.push({ text: '', pageBreak: 'after' });
+
+  content.push({ text: 'Executive Summary', style: 'h1' });
+  content.push({
+    columns: [
+      { width: 150, stack: [
+        { text: (m.completed_pct || 0).toFixed(0) + '%', style: 'bigStat', color: progressColor(m.completed_pct || 0) },
+        { text: 'Tickets Completed', style: 'bigStatLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: (m.total || 0) + ' ticket(s) total -- ' + (m.pending || 0) + ' pending, ' + (m.in_progress || 0) + ' in progress, ' + (m.completed || 0) + ' completed.', margin: [0, 4, 0, 4] },
+        { text: (m.sla_breach || 0) + ' SLA breach(es) recorded.', color: (m.sla_breach || 0) > 0 ? B.danger : B.dim, fontSize: 9.5, bold: (m.sla_breach || 0) > 0 }
+      ] }
+    ],
+    margin: [0, 8, 0, 16]
+  });
+
+  var res = data.resolution || {};
+  content.push({ text: 'Resolution Performance', style: 'h2' });
+  content.push({
+    columns: [
+      { width: '*', stack: [
+        { text: res.sla_compliance_pct != null ? res.sla_compliance_pct.toFixed(0) + '%' : 'n/a', style: 'statValue', color: res.sla_compliance_pct != null ? progressColor(res.sla_compliance_pct) : B.dim },
+        { text: 'SLA Compliance', style: 'statLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: res.avg_days != null ? res.avg_days.toFixed(1) : 'n/a', style: 'statValue', color: B.accent },
+        { text: 'Avg Days to Close', style: 'statLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: res.median_days != null ? res.median_days.toFixed(1) : 'n/a', style: 'statValue', color: B.accent },
+        { text: 'Median Days to Close', style: 'statLabel' }
+      ] }
+    ],
+    margin: [0, 4, 0, 20]
+  });
+
+  content.push({ text: 'Status Breakdown', style: 'h2' });
+  var statusRows = [[{ text: 'Status', style: 'th' }, { text: 'Count', style: 'th' }]];
+  (data.status_counts || []).forEach(function(s) {
+    statusRows.push([{ text: s.status, bold: true, color: ticketStatusColor(s.status) }, { text: String(s.count), alignment: 'center' }]);
+  });
+  content.push({ table: { headerRows: 1, widths: ['*', 80], body: statusRows }, layout: formalTableLayout(), margin: [0, 4, 0, 16] });
+
+  content.push({ text: 'Priority Breakdown', style: 'h2' });
+  var priorityRows = [[{ text: 'Priority', style: 'th' }, { text: 'Count', style: 'th' }]];
+  (data.priority_counts || []).forEach(function(p) {
+    priorityRows.push([{ text: p.priority, bold: true, color: ticketPriorityColor(p.priority) }, { text: String(p.count), alignment: 'center' }]);
+  });
+  if (!(data.priority_counts || []).length) priorityRows.push([{ text: 'No priority data available.', colSpan: 2, color: B.dim }, {}]);
+  content.push({ table: { headerRows: 1, widths: ['*', 80], body: priorityRows }, layout: formalTableLayout(), margin: [0, 4, 0, 20] });
+
+  content.push({ text: 'Tickets by Project', style: 'h2' });
+  content.push({ text: 'Sorted by open ticket count (Pending + In Progress), so the project needing the most attention sorts to the top.', style: 'note', margin: [0, 0, 0, 6] });
+  var projRows = [[
+    { text: 'Project', style: 'th' }, { text: 'Total', style: 'th' }, { text: 'Completed', style: 'th' },
+    { text: 'Pending', style: 'th' }, { text: 'In Progress', style: 'th' }, { text: 'SLA Breaches', style: 'th' }
+  ]];
+  (data.project_counts || []).forEach(function(p) {
+    projRows.push([
+      { text: p.project, bold: true },
+      { text: String(p.total), alignment: 'center' },
+      { text: String(p.completed), alignment: 'center', color: B.success },
+      { text: String(p.pending), alignment: 'center', color: B.warning },
+      { text: String(p.in_progress), alignment: 'center', color: B.accent },
+      { text: String(p.sla_breach), alignment: 'center', color: p.sla_breach > 0 ? B.danger : undefined, bold: p.sla_breach > 0 }
+    ]);
+  });
+  if (!(data.project_counts || []).length) projRows.push([{ text: 'No project data available.', colSpan: 6, color: B.dim }, {}, {}, {}, {}, {}]);
+  content.push({ table: { headerRows: 1, widths: ['*', 45, 65, 55, 70, 75], body: projRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 20] });
+
+  content.push({ text: 'Ticket Analytics', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Monthly Trend', style: 'h2' });
+  content.push({ text: 'Tickets raised vs. resolved per calendar month.', style: 'note', margin: [0, 0, 0, 6] });
+  var trend = data.monthly_trend || [];
+  if (trend.length) {
+    var trendMax = Math.max.apply(null, trend.map(function(t) { return Math.max(t.created, t.completed); }).concat([1]));
+    content.push({
+      columns: [
+        { width: 10, canvas: [{ type: 'rect', x: 0, y: 2, w: 10, h: 10, color: B.accent }] },
+        { width: 'auto', text: 'Created', fontSize: 8.5, color: B.dim, margin: [4, 0, 16, 0] },
+        { width: 10, canvas: [{ type: 'rect', x: 0, y: 2, w: 10, h: 10, color: B.success }] },
+        { width: 'auto', text: 'Completed', fontSize: 8.5, color: B.dim, margin: [4, 0, 0, 0] }
+      ],
+      margin: [0, 0, 0, 6]
+    });
+    var trendRows = [[{ text: 'Month', style: 'th' }, { text: 'Created', style: 'th' }, { text: 'Completed', style: 'th' }]];
+    trend.forEach(function(t) {
+      trendRows.push([t.label, pdfCountBar(t.created, trendMax, B.accent), pdfCountBar(t.completed, trendMax, B.success)]);
+    });
+    content.push({ table: { headerRows: 1, widths: [70, '*', '*'], body: trendRows }, layout: formalTableLayout(), margin: [0, 0, 0, 20] });
+  } else {
+    content.push({ text: 'No dated tickets available to chart.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Monthly Trend by Project', style: 'h2' });
+  content.push({ text: 'Tickets raised per month, per project. Capped to the top ' + 6 + ' projects by ticket volume, with the rest grouped into "Other".', style: 'note', margin: [0, 0, 0, 6] });
+  var byProject = data.monthly_trend_by_project || [];
+  if (byProject.length && trend.length) {
+    var byProjMax = Math.max.apply(null, byProject.map(function(s) { return Math.max.apply(null, s.points.map(function(pt) { return pt.created; }).concat([0])); }).concat([1]));
+    var projHeader = [{ text: 'Month', style: 'th' }].concat(byProject.map(function(s) { return { text: s.project, style: 'th', fontSize: 7.5 }; }));
+    var projPivotRows = [projHeader];
+    trend.forEach(function(t, i) {
+      var row = [{ text: t.label, bold: true, fontSize: 8 }];
+      byProject.forEach(function(s) {
+        var count = s.points[i] ? s.points[i].created : 0;
+        var intensity = byProjMax > 0 ? count / byProjMax : 0;
+        row.push({ text: String(count), alignment: 'center', fontSize: 8, bold: count > 0, color: count > 0 ? B.navy : B.dim, fillColor: count > 0 ? shadeColor(B.accent, intensity) : undefined });
+      });
+      projPivotRows.push(row);
+    });
+    content.push({
+      table: { headerRows: 1, widths: [55].concat(byProject.map(function() { return '*'; })), body: projPivotRows },
+      layout: {
+        hLineWidth: function() { return 0.5; }, vLineWidth: function() { return 0.5; },
+        hLineColor: function() { return '#b9c4d0'; }, vLineColor: function() { return '#b9c4d0'; },
+        paddingLeft: function() { return 3; }, paddingRight: function() { return 3; },
+        paddingTop: function() { return 3; }, paddingBottom: function() { return 3; }
+      },
+      margin: [0, 0, 0, 20]
+    });
+  } else {
+    content.push({ text: 'No project-dated tickets available to chart.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Open Ticket Ageing', style: 'h2' });
+  content.push({ text: 'How long currently open (Pending/In Progress) tickets have been sitting.', style: 'note', margin: [0, 0, 0, 6] });
+  var ageBuckets = data.ageing_buckets || [];
+  var ageColors = { '1-30 Days': B.accent, '31-60 Days': B.warning, '> 60 Days': B.danger };
+  if (ageBuckets.length && ageBuckets.some(function(a) { return a.count > 0; })) {
+    var ageMax = Math.max.apply(null, ageBuckets.map(function(a) { return a.count; }).concat([1]));
+    var ageRows = [[{ text: 'Age Bucket', style: 'th' }, { text: 'Open Tickets', style: 'th' }]];
+    ageBuckets.forEach(function(a) {
+      ageRows.push([a.bucket, pdfCountBar(a.count, ageMax, ageColors[a.bucket] || B.accent)]);
+    });
+    content.push({ table: { headerRows: 1, widths: [90, '*'], body: ageRows }, layout: formalTableLayout(), margin: [0, 0, 0, 20] });
+  } else {
+    content.push({ text: 'No open tickets with ageing data.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Ticket Details', style: 'h1', pageBreak: 'before' });
+  var ticketRows = [[
+    { text: 'Ticket No', style: 'th' }, { text: 'Title', style: 'th' }, { text: 'Priority', style: 'th' },
+    { text: 'Status', style: 'th' }, { text: 'Created', style: 'th' }, { text: 'Ageing', style: 'th' }
+  ]];
+  (data.tickets || []).forEach(function(t) {
+    ticketRows.push([
+      t.ticket_no || '-', t.title || '-',
+      { text: t.priority || '-', color: ticketPriorityColor(t.priority) },
+      { text: t.status || '-', bold: true, color: ticketStatusColor(t.status) },
+      t.created || '-', t.ageing || '-'
+    ]);
+  });
+  if (!(data.tickets || []).length) ticketRows.push([{ text: 'No tickets recorded.', colSpan: 6, color: B.dim }, {}, {}, {}, {}, {}]);
+  content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 60, 55, 55], body: ticketRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 0] });
+
+  content.push({ text: 'Attention Needed', style: 'h1', pageBreak: 'before' });
+  var att = data.attention || {};
+  content.push({ text: 'Open Tickets (' + (att.open_tickets || []).length + ')', style: 'h2' });
+  content.push({ text: 'Tickets currently Pending or In Progress -- not yet Completed/Closed.', style: 'note', margin: [0, 0, 0, 6] });
+  if ((att.open_tickets || []).length) {
+    var openRows = [[
+      { text: 'Ticket No', style: 'th' }, { text: 'Title', style: 'th' }, { text: 'Priority', style: 'th' },
+      { text: 'Status', style: 'th' }, { text: 'Created', style: 'th' }, { text: 'Ageing', style: 'th' }
+    ]];
+    att.open_tickets.forEach(function(t) {
+      openRows.push([
+        t.ticket_no || '-', t.title || '-',
+        { text: t.priority || '-', color: ticketPriorityColor(t.priority) },
+        { text: t.status || '-', bold: true, color: ticketStatusColor(t.status) },
+        t.created || '-', t.ageing || '-'
+      ]);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 60, 55, 55], body: openRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 0, 0, 16] });
+  } else {
+    content.push({ text: 'None -- every ticket is Completed or Closed.', color: B.success, margin: [0, 0, 0, 16] });
+  }
+
+  content.push({ text: 'SLA Breaches (' + (att.sla_breaches || []).length + ')', style: 'h2' });
+  if ((att.sla_breaches || []).length) {
+    var slaRows = [[
+      { text: 'Ticket No', style: 'th' }, { text: 'Title', style: 'th' }, { text: 'Priority', style: 'th' },
+      { text: 'Status', style: 'th' }, { text: 'Created', style: 'th' }
+    ]];
+    att.sla_breaches.forEach(function(t) {
+      slaRows.push([
+        t.ticket_no || '-', t.title || '-',
+        { text: t.priority || '-', color: ticketPriorityColor(t.priority) },
+        { text: t.status || '-', bold: true, color: ticketStatusColor(t.status) },
+        t.created || '-'
+      ]);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 60, 55], body: slaRows }, layout: formalTableLayout(), fontSize: 9 });
+  } else {
+    content.push({ text: 'None -- no SLA breaches recorded.', color: B.success });
+  }
+
+  return {
+    pageMargins: [40, 90, 40, 50],
+    background: function(currentPage, pageSize) {
+      var w = pageSize.width, h = pageSize.height;
+      if (currentPage === 1) {
+        var bandH = 86;
+        return {
+          stack: [
+            { canvas: [
+              { type: 'rect', x: 0, y: 0, w: w, h: 5, color: B.accent },
+              { type: 'rect', x: 0, y: h - bandH, w: w, h: bandH, color: '#1a1a1a' }
+            ] },
+            {
+              absolutePosition: { x: 0, y: h - bandH + 22 },
+              columns: [{ width: w, stack: [
+                { text: 'CONFIDENTIAL', color: '#ffffff', bold: true, fontSize: 11, alignment: 'center', characterSpacing: 2 },
+                { text: 'For Internal & Client Distribution Only', color: '#9aa4b0', fontSize: 8.5, alignment: 'center', margin: [0, 4, 0, 0] }
+              ] }]
+            }
+          ]
+        };
+      }
+      if (!logoDataUrl) return null;
+      var boxSize = Math.min(w, h) * 0.55;
+      var logoAspect = 250 / 110;
+      var logoW = boxSize, logoH = boxSize / logoAspect;
+      return {
+        image: logoDataUrl, fit: [boxSize, boxSize], opacity: 0.05,
+        absolutePosition: { x: (w - logoW) / 2, y: (h - logoH) / 2 }
+      };
+    },
+    header: function(currentPage) {
+      if (currentPage === 1) return null;
+      return {
+        margin: [40, 20, 40, 0],
+        columns: [
+          logoDataUrl ? { image: logoDataUrl, width: 45 } : { text: '' },
+          { text: B.name, margin: [8, 2, 0, 0], fontSize: 9, bold: true, color: B.navy },
+          { text: (data.category || '') + ' Status Report', alignment: 'right', fontSize: 9, color: B.dim }
+        ]
+      };
+    },
+    footer: function(currentPage, pageCount) {
+      if (currentPage === 1) return null;
+      return { text: currentPage + ' / ' + pageCount, alignment: 'center', fontSize: 8, color: B.dim, margin: [0, 10, 0, 0] };
+    },
+    content: content,
+    defaultStyle: { fontSize: 10, color: '#1a1a1a' },
+    styles: {
+      coverKicker: { fontSize: 10.5, bold: true, color: '#5a6b7a', characterSpacing: 2 },
+      coverTitle: { fontSize: 27, bold: true, color: '#1a1a1a' },
+      coverSubtitle: { fontSize: 14, color: B.accent },
+      coverLabel: { fontSize: 8, bold: true, color: '#5a6b7a', characterSpacing: 0.5, alignment: 'center' },
+      coverValue: { fontSize: 11, bold: true, color: '#1a1a1a', margin: [0, 3, 0, 0], alignment: 'center' },
+      h1: { fontSize: 16, bold: true, color: '#1a1a1a', margin: [0, 0, 0, 8] },
+      h2: { fontSize: 12, bold: true, color: B.accent, margin: [0, 4, 0, 6] },
+      th: { bold: true, fontSize: 9, color: '#fff', fillColor: '#1a1a1a' },
+      note: { fontSize: 9, italics: true, color: B.dim },
+      bigStat: { fontSize: 34, bold: true },
+      bigStatLabel: { fontSize: 9, color: B.dim, bold: true },
+      statValue: { fontSize: 22, bold: true, alignment: 'center' },
+      statLabel: { fontSize: 8.5, color: B.dim, bold: true, alignment: 'center', margin: [0, 2, 0, 0] }
+    }
+  };
+}
+
+function downloadTicketReport(btn, category) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  if (!client) {
+    alert('Select a single client first to generate a ' + category.toLowerCase() + ' report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PDF...');
+  var url = '/api/ticket_report_data?client=' + encodeURIComponent(client) + '&category=' + encodeURIComponent(category);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var doc = buildTicketReportDoc(res.data, logoDataUrl);
+      pdfMake.createPdf(doc).download(ticketReportFileName(res.data, 'pdf'));
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
+
+/* ---------- Warranty / Maintenance PPTX report (PptxGenJS) ---------- */
+function ticketPptxColor(hexColor) { return hexColor.replace('#', ''); }
+
+function pptxTicketTableSlide(pptx, header, W, H_, title, subtitle, items, columns, emptyMsg, accentColor) {
+  var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(slide, title);
+  slide.addText(title, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  if (subtitle) slide.addText(subtitle, { x: 0.5, y: 1.2, w: W - 1, h: 0.4, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (!items.length) {
+    slide.addText(emptyMsg, { x: 0.5, y: subtitle ? 1.8 : 1.4, w: 10, h: 0.4, bold: true, fontSize: 12, color: H_.success, fontFace: 'Arial' });
+    return;
+  }
+  var headerRow = columns.map(function(c) {
+    return { text: c.label, options: { bold: true, color: 'FFFFFF', fill: { color: accentColor || H_.navy }, align: c.align || 'left' } };
+  });
+  var rows = [headerRow];
+  items.forEach(function(it, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    rows.push(columns.map(function(c) {
+      var val = it[c.key] != null && it[c.key] !== '' ? String(it[c.key]) : '-';
+      var opts = { fontSize: 9, align: c.align || 'left', fill: { color: zebra } };
+      if (c.color) opts.color = c.color(it);
+      if (c.bold) opts.bold = true;
+      return { text: val, options: opts };
+    }));
+  });
+  var widths = columns.map(function(c) { return (W - 1) * c.w; });
+  slide.addTable(rows, {
+    x: 0.5, y: subtitle ? 1.7 : 1.3, w: W - 1, colW: widths,
+    fontSize: 9, border: { type: 'solid', color: H_.border, pt: 0.75 },
+    autoPage: true, autoPageRepeatHeader: true, autoPageHeaderRows: 1,
+    newSlideStartY: 0.9, masterSlideName: 'SW_BASE'
+  });
+}
+
+function buildTicketReportPptx(data, logoDataUrl) {
+  var pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  var W = 13.33, H = 7.5;
+  var H_ = PPTX_HEX;
+  var m = data.metrics || {};
+  pptx.defineSlideMaster({ title: 'SW_BASE', background: { color: 'FFFFFF' } });
+
+  function header(slide, pageLabel) {
+    slide.addShape('rect', { x: 0, y: 0, w: W, h: 0.5, fill: { color: 'FFFFFF' }, line: { type: 'none' } });
+    if (logoDataUrl) slide.addImage({ data: logoDataUrl, x: 0.4, y: 0.12, w: 0.7, h: 0.7 * 110 / 250 });
+    slide.addText(REPORT_BRAND.name, { x: 1.2, y: 0.12, w: 5, h: 0.3, fontSize: 9, bold: true, color: H_.navy, fontFace: 'Arial' });
+    slide.addText(pageLabel || (data.category + ' Status Report'), { x: W - 5.4, y: 0.12, w: 5, h: 0.3, align: 'right', fontSize: 9, color: H_.dim, fontFace: 'Arial' });
+    slide.addShape('rect', { x: 0, y: 0.5, w: W, h: 0.015, fill: { color: H_.border }, line: { type: 'none' } });
+  }
+
+  // ---- Slide 1: Cover ----
+  var cover = pptx.addSlide({ masterName: 'SW_BASE' });
+  cover.addShape('rect', { x: 0, y: 0, w: W, h: 0.06, fill: { color: H_.accent }, line: { type: 'none' } });
+  var bandH = 0.85;
+  cover.addShape('rect', { x: 0, y: H - bandH, w: W, h: bandH, fill: { color: H_.navy }, line: { type: 'none' } });
+  cover.addText('CONFIDENTIAL', { x: 0, y: H - bandH + 0.2, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: 'FFFFFF', charSpacing: 3, fontFace: 'Arial' });
+  cover.addText('For Internal & Client Distribution Only', { x: 0, y: H - bandH + 0.5, w: W, h: 0.25, align: 'center', fontSize: 9, color: 'AEB9C4', fontFace: 'Arial' });
+  if (logoDataUrl) {
+    var logoW = 3.4, logoH = logoW * 110 / 250;
+    cover.addImage({ data: logoDataUrl, x: (W - logoW) / 2, y: 0.75, w: logoW, h: logoH });
+  }
+  cover.addShape('rect', { x: W / 2 - 0.5, y: 2.55, w: 1.0, h: 0.018, fill: { color: H_.accent }, line: { type: 'none' } });
+  cover.addText((data.category || 'TICKET').toUpperCase() + ' STATUS REPORT', { x: 0, y: 2.75, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: H_.dim, charSpacing: 2.5, fontFace: 'Arial' });
+  cover.addText(data.client, { x: 0.5, y: 3.1, w: W - 1, h: 0.6, align: 'center', bold: true, fontSize: 30, color: H_.navy, fontFace: 'Arial' });
+  cover.addText(data.category, { x: 0, y: 3.72, w: W, h: 0.4, align: 'center', fontSize: 16, color: H_.accent, fontFace: 'Arial' });
+  var factY = 4.5;
+  cover.addShape('rect', { x: 1.5, y: factY, w: W - 3.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+  var facts = [
+    ['TOTAL TICKETS', String(m.total || 0)],
+    ['COMPLETED', String(m.completed || 0)],
+    ['OPEN', String((m.pending || 0) + (m.in_progress || 0))],
+    ['SLA BREACHES', String(m.sla_breach || 0)]
+  ];
+  var factW = (W - 3.0) / 4;
+  facts.forEach(function(f, i) {
+    var fx = 1.5 + i * factW;
+    cover.addText(f[0], { x: fx, y: factY + 0.12, w: factW, h: 0.25, align: 'center', bold: true, fontSize: 8, color: H_.dim, charSpacing: 0.5, fontFace: 'Arial' });
+    cover.addText(f[1], { x: fx, y: factY + 0.38, w: factW, h: 0.35, align: 'center', bold: true, fontSize: 11, color: H_.navy, fontFace: 'Arial' });
+  });
+  cover.addShape('rect', { x: 1.5, y: factY + 0.85, w: W - 3.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+
+  // ---- Slide 2: Executive Summary ----
+  var exec = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(exec);
+  exec.addText('Executive Summary', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  pptxRingSlide(exec, 0.4, 1.25, 3.4, 3.0, m.completed_pct || 0, 'Tickets Completed', (m.total || 0) + ' total ticket(s)');
+  exec.addText((m.total || 0) + ' ticket(s) total -- ' + (m.pending || 0) + ' pending, ' + (m.in_progress || 0) + ' in progress, ' + (m.completed || 0) + ' completed.', { x: 4.0, y: 1.9, w: 8.8, h: 0.4, fontSize: 11, color: H_.navy, fontFace: 'Arial' });
+  exec.addText((m.sla_breach || 0) + ' SLA breach(es) recorded.', { x: 4.0, y: 2.4, w: 8.8, h: 0.4, fontSize: 11, bold: (m.sla_breach || 0) > 0, color: (m.sla_breach || 0) > 0 ? H_.danger : H_.dim, fontFace: 'Arial' });
+
+  var res = data.resolution || {};
+  exec.addText('RESOLUTION PERFORMANCE', { x: 0.4, y: 3.55, w: 8, h: 0.3, bold: true, fontSize: 11, color: H_.dim, charSpacing: 1, fontFace: 'Arial' });
+  var resStats = [
+    ['SLA Compliance', res.sla_compliance_pct != null ? res.sla_compliance_pct.toFixed(0) + '%' : 'n/a', res.sla_compliance_pct != null ? pptxProgressColor(res.sla_compliance_pct) : H_.dim],
+    ['Avg Days to Close', res.avg_days != null ? res.avg_days.toFixed(1) : 'n/a', H_.accent],
+    ['Median Days to Close', res.median_days != null ? res.median_days.toFixed(1) : 'n/a', H_.accent]
+  ];
+  var resW = 2.9, resGap = 0.2, resY = 3.95;
+  resStats.forEach(function(s, i) {
+    var rx = 0.4 + i * (resW + resGap);
+    exec.addShape('roundRect', { x: rx, y: resY, w: resW, h: 1.15, rectRadius: 0.06, fill: { color: H_.panel }, line: { color: H_.border, width: 0.75 } });
+    exec.addText(s[1], { x: rx, y: resY + 0.14, w: resW, h: 0.55, align: 'center', bold: true, fontSize: 24, color: s[2], fontFace: 'Arial' });
+    exec.addText(s[0], { x: rx, y: resY + 0.75, w: resW, h: 0.3, align: 'center', fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  });
+
+  // ---- Slide: Monthly Trend ----
+  var trend = data.monthly_trend || [];
+  var trendSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(trendSlide);
+  trendSlide.addText('Monthly Trend', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  trendSlide.addText('Tickets raised vs. resolved per calendar month.', { x: 0.5, y: 1.2, w: W - 1, h: 0.35, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (trend.length) {
+    trendSlide.addChart('bar', [
+      { name: 'Created', labels: trend.map(function(t) { return t.label; }), values: trend.map(function(t) { return t.created; }) },
+      { name: 'Completed', labels: trend.map(function(t) { return t.label; }), values: trend.map(function(t) { return t.completed; }) }
+    ], {
+      x: 0.5, y: 1.7, w: W - 1, h: H - 2.4,
+      barDir: 'col', barGrouping: 'clustered',
+      chartColors: [H_.accent, H_.success],
+      showLegend: true, legendPos: 'b',
+      showTitle: false, catAxisLabelColor: H_.dim, valAxisLabelColor: H_.dim,
+      catAxisLabelFontSize: 9, valAxisLabelFontSize: 9
+    });
+  } else {
+    trendSlide.addText('No dated tickets available to chart.', { x: 0.5, y: 2.0, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide: Monthly Trend by Project ----
+  var byProject = data.monthly_trend_by_project || [];
+  var projTrendSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(projTrendSlide);
+  projTrendSlide.addText('Monthly Trend by Project', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  projTrendSlide.addText('Tickets raised per month, per project. Capped to the top 6 projects by ticket volume, with the rest grouped into "Other".', { x: 0.5, y: 1.2, w: W - 1, h: 0.35, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (byProject.length && trend.length) {
+    var projPalette = [H_.accent, H_.success, H_.warning, H_.danger, H_.teal, H_.navy, H_.dim];
+    projTrendSlide.addChart('line', byProject.map(function(s, i) {
+      return { name: s.project, labels: s.points.map(function(pt) { return pt.label; }), values: s.points.map(function(pt) { return pt.created; }) };
+    }), {
+      x: 0.5, y: 1.7, w: W - 1, h: H - 2.4,
+      chartColors: byProject.map(function(s, i) { return s.project === 'Other' ? H_.dim : projPalette[i % projPalette.length]; }),
+      lineSize: 2, lineDataSymbol: 'none',
+      showLegend: true, legendPos: 'b', legendFontSize: 9,
+      showTitle: false, catAxisLabelColor: H_.dim, valAxisLabelColor: H_.dim,
+      catAxisLabelFontSize: 7, valAxisLabelFontSize: 9,
+      catAxisLabelRotate: 45
+    });
+  } else {
+    projTrendSlide.addText('No project-dated tickets available to chart.', { x: 0.5, y: 2.0, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide: Open Ticket Ageing ----
+  var ageBuckets = data.ageing_buckets || [];
+  var ageColors = { '1-30 Days': H_.accent, '31-60 Days': H_.warning, '> 60 Days': H_.danger };
+  var ageSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(ageSlide);
+  ageSlide.addText('Open Ticket Ageing', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  ageSlide.addText('How long currently open (Pending/In Progress) tickets have been sitting.', { x: 0.5, y: 1.2, w: W - 1, h: 0.35, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (ageBuckets.length && ageBuckets.some(function(a) { return a.count > 0; })) {
+    ageSlide.addChart('bar', [{ name: 'Open Tickets', labels: ageBuckets.map(function(a) { return a.bucket; }), values: ageBuckets.map(function(a) { return a.count; }) }], {
+      x: 1.5, y: 1.7, w: W - 3, h: H - 2.4,
+      barDir: 'col', chartColors: ageBuckets.map(function(a) { return ageColors[a.bucket] || H_.accent; }), valueBarColors: true,
+      showLegend: false, showTitle: false, catAxisLabelColor: H_.dim, valAxisLabelColor: H_.dim,
+      catAxisLabelFontSize: 10, valAxisLabelFontSize: 9, showValue: true, dataLabelColor: H_.navy, dataLabelFontSize: 10
+    });
+  } else {
+    ageSlide.addText('No open tickets with ageing data.', { x: 0.5, y: 2.0, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide 3: Status + Priority breakdown ----
+  var statusSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(statusSlide);
+  statusSlide.addText('Status & Priority Breakdown', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var statusRows = [[{ text: 'Status', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } }, { text: 'Count', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }]];
+  (data.status_counts || []).forEach(function(s, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    statusRows.push([{ text: s.status, options: { bold: true, fill: { color: zebra } } }, { text: String(s.count), options: { align: 'center', fill: { color: zebra } } }]);
+  });
+  statusSlide.addTable(statusRows, { x: 0.5, y: 1.4, w: 5.5, colW: [3.7, 1.8], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 } });
+  var priorityRows = [[{ text: 'Priority', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } }, { text: 'Count', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }]];
+  (data.priority_counts || []).forEach(function(p, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    priorityRows.push([{ text: p.priority, options: { bold: true, fill: { color: zebra } } }, { text: String(p.count), options: { align: 'center', fill: { color: zebra } } }]);
+  });
+  if ((data.priority_counts || []).length) {
+    statusSlide.addTable(priorityRows, { x: 6.5, y: 1.4, w: 5.5, colW: [3.7, 1.8], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 } });
+  }
+
+  // ---- Slide: Tickets by Project ----
+  var projectCols = [
+    { key: 'project', label: 'Project', w: 0.32 },
+    { key: 'total', label: 'Total', w: 0.13, align: 'center' },
+    { key: 'completed', label: 'Completed', w: 0.15, align: 'center', color: function() { return H_.success; } },
+    { key: 'pending', label: 'Pending', w: 0.13, align: 'center', color: function() { return H_.warning; } },
+    { key: 'in_progress', label: 'In Progress', w: 0.15, align: 'center', color: function() { return H_.accent; } },
+    { key: 'sla_breach', label: 'SLA Breaches', w: 0.12, align: 'center', color: function(it) { return it.sla_breach > 0 ? H_.danger : H_.navy; }, bold: true }
+  ];
+  pptxTicketTableSlide(pptx, header, W, H_, 'Tickets by Project', 'Sorted by open ticket count (Pending + In Progress), so the project needing the most attention sorts to the top.', data.project_counts || [], projectCols, 'No project data available.');
+
+  // ---- Slide(s): Ticket Details (full list) ----
+  var ticketCols = [
+    { key: 'ticket_no', label: 'Ticket No', w: 0.14 },
+    { key: 'title', label: 'Title', w: 0.32 },
+    { key: 'priority', label: 'Priority', w: 0.14, align: 'center', color: function(it) { return ticketPptxColor(ticketPriorityColor(it.priority)); } },
+    { key: 'status', label: 'Status', w: 0.16, align: 'center', bold: true, color: function(it) { return ticketPptxColor(ticketStatusColor(it.status)); } },
+    { key: 'created', label: 'Created', w: 0.12, align: 'center' },
+    { key: 'ageing', label: 'Ageing', w: 0.12, align: 'center' }
+  ];
+  pptxTicketTableSlide(pptx, header, W, H_, 'Ticket Details', null, data.tickets || [], ticketCols, 'No tickets recorded.');
+
+  // ---- Slide(s): Attention Needed -- Open Tickets ----
+  var att = data.attention || {};
+  pptxTicketTableSlide(pptx, header, W, H_, 'Open Tickets (' + (att.open_tickets || []).length + ')', 'Tickets currently Pending or In Progress -- not yet Completed/Closed.', att.open_tickets || [], ticketCols, 'None -- every ticket is Completed or Closed.');
+
+  // ---- Slide(s): Attention Needed -- SLA Breaches ----
+  var slaCols = ticketCols.slice(0, 5);
+  pptxTicketTableSlide(pptx, header, W, H_, 'SLA Breaches (' + (att.sla_breaches || []).length + ')', null, att.sla_breaches || [], slaCols, 'None -- no SLA breaches recorded.', H_.danger);
+
+  return pptx;
+}
+
+function downloadTicketReportPptx(btn, category) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  if (!client) {
+    alert('Select a single client first to generate a ' + category.toLowerCase() + ' report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PPTX...');
+  var url = '/api/ticket_report_data?client=' + encodeURIComponent(client) + '&category=' + encodeURIComponent(category);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var pptx = buildTicketReportPptx(res.data, logoDataUrl);
+      return pptx.writeFile({ fileName: ticketReportFileName(res.data, 'pptx') });
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
+
 function toggleEdit8() {
   var btn = document.getElementById('editBtn8');
   var table = document.querySelector('#tab-8 .data-table-wrap');

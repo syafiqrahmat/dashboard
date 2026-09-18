@@ -889,6 +889,197 @@ def build_project_report_data(client, projek_name):
     }
 
 
+def build_ticket_report_data(client, category):
+    """Aggregate one client's Warranty or Maintenance tickets into the shape
+    the client-side PDF/PPTX report (pdfmake/pptxgenjs, see dashboard.html)
+    renders -- the ticket-side counterpart to build_project_report_data.
+    Returns None if nothing matches.
+
+    category is "Warranty" or "Maintenance". Warranty tickets are stored
+    under a shared "Client Warranty" sentinel Client value with the real
+    client only recorded in Company (see build_tab_context's idx == 2
+    branch, which this mirrors), so it needs its own lookup path instead of
+    the plain clients/task_types filter Maintenance uses.
+    """
+    lookup_client = CLIENT_DISPLAY_ALIASES.get(client, client)
+    if category == "Warranty":
+        try:
+            df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
+        except Exception as e:
+            log(f"DB error loading warranty tickets: {e}", "ERROR")
+            df = pd.DataFrame()
+        if "Company" in df.columns:
+            df = df[df["Company"] == lookup_client]
+    else:
+        try:
+            df, _ = load_data({"clients": [lookup_client], "priorities": [], "statuses": [], "task_types": [category], "search": None})
+        except Exception as e:
+            log(f"DB error loading {category} tickets: {e}", "ERROR")
+            df = pd.DataFrame()
+    if df.empty:
+        return None
+
+    def fmt_date(v):
+        if v is None or pd.isna(v):
+            return None
+        return v.strftime("%d/%m/%Y")
+
+    total = len(df)
+    statuses = df["Ticket Status"] if "Ticket Status" in df.columns else pd.Series(dtype=object)
+    completed = int(statuses.isin(["Completed", "Closed"]).sum())
+    pending = int((statuses == "Pending").sum())
+    in_progress = int((statuses == "In Progress").sum())
+    sla_breach = int(df["SLA Breach"].sum()) if "SLA Breach" in df.columns else 0
+
+    metrics = {
+        "total": total, "completed": completed, "pending": pending,
+        "in_progress": in_progress, "sla_breach": sla_breach,
+        "completed_pct": round(completed / total * 100, 1) if total else 0,
+        "pending_pct": round(pending / total * 100, 1) if total else 0,
+        "in_progress_pct": round(in_progress / total * 100, 1) if total else 0,
+    }
+
+    status_counts = []
+    if "Ticket Status" in df.columns:
+        sc = df["Ticket Status"].dropna().value_counts()
+        status_counts = [{"status": k, "count": int(v)} for k, v in sc.items()]
+
+    priority_counts = []
+    if "Priority" in df.columns:
+        pc = df["Priority"].dropna().value_counts()
+        priority_counts = [{"priority": k, "count": int(v)} for k, v in pc.items()]
+
+    # Per-project breakdown -- a client can run tickets against more than
+    # one project (e.g. LKTN's Payroll/Claim/Asset modules each raise their
+    # own tickets), so a flat client-wide total hides which project is
+    # actually driving the ticket load. Sorted by open-ticket count (same
+    # rule build_overall_client_charts uses for its client ranking) so the
+    # project needing the most attention sorts to the top.
+    project_counts = []
+    if "Project" in df.columns:
+        for project, pdf_ in df.groupby(df["Project"].fillna("(No Project)")):
+            statuses = pdf_["Ticket Status"] if "Ticket Status" in pdf_.columns else pd.Series(dtype=object)
+            p_completed = int(statuses.isin(["Completed", "Closed"]).sum())
+            p_pending = int((statuses == "Pending").sum())
+            p_in_progress = int((statuses == "In Progress").sum())
+            project_counts.append({
+                "project": str(project),
+                "total": int(len(pdf_)),
+                "completed": p_completed,
+                "pending": p_pending,
+                "in_progress": p_in_progress,
+                "sla_breach": int(pdf_["SLA Breach"].sum()) if "SLA Breach" in pdf_.columns else 0,
+            })
+        project_counts.sort(key=lambda p: p["pending"] + p["in_progress"], reverse=True)
+
+    def ticket_entry(row):
+        return {
+            "ticket_no": row.get("Ticket No") if pd.notna(row.get("Ticket No")) else "",
+            "task_type": row.get("Task Type") if pd.notna(row.get("Task Type")) else "",
+            "project": row.get("Project") if pd.notna(row.get("Project")) else "",
+            "title": row.get("Ticket Title") if pd.notna(row.get("Ticket Title")) else "",
+            "priority": row.get("Priority") if pd.notna(row.get("Priority")) else "",
+            "status": row.get("Ticket Status") if pd.notna(row.get("Ticket Status")) else "",
+            "created": fmt_date(row.get("Ticket Created Date")),
+            "completed": fmt_date(row.get("Ticket Completed Date")),
+            "closed": fmt_date(row.get("Ticket Closed Date")),
+            "ageing": row.get("Ageing") if pd.notna(row.get("Ageing")) else "",
+            "sla_breach": bool(row.get("SLA Breach")) if pd.notna(row.get("SLA Breach")) else False,
+        }
+
+    # Newest first reads more usefully than source-file order for a report.
+    if "Ticket Created Date" in df.columns:
+        df = df.sort_values("Ticket Created Date", ascending=False, na_position="last")
+    tickets = [ticket_entry(row) for _, row in df.iterrows()]
+
+    open_statuses = {"Pending", "In Progress"}
+    open_tickets = [t for t in tickets if t["status"] in open_statuses]
+    sla_breaches = [t for t in tickets if t["sla_breach"]]
+
+    # Resolution performance -- Days to Close is only populated once a
+    # ticket has actually closed, so this is naturally scoped to resolved
+    # tickets rather than needing its own status filter.
+    avg_days = median_days = None
+    if "Days to Close" in df.columns:
+        valid_days = pd.to_numeric(df["Days to Close"], errors="coerce").dropna()
+        if not valid_days.empty:
+            avg_days = round(float(valid_days.mean()), 1)
+            median_days = round(float(valid_days.median()), 1)
+    sla_compliance_pct = round((total - sla_breach) / total * 100, 1) if total else None
+
+    # Ageing buckets: Ageing is only populated for still-open tickets (see
+    # build_ageing_charts), so this reads as "how old is each open ticket",
+    # not a bucketing of every ticket ever raised.
+    age_order = ["1-30 Days", "31-60 Days", "> 60 Days"]
+    ageing_buckets = []
+    if "Ageing" in df.columns:
+        ac = df["Ageing"].dropna().value_counts().reindex(age_order, fill_value=0)
+        ageing_buckets = [{"bucket": k, "count": int(v)} for k, v in ac.items()]
+
+    # Monthly trend: tickets raised vs. resolved per calendar month, so the
+    # report shows whether the workload is growing or the team is keeping
+    # pace with it, not just a point-in-time snapshot.
+    monthly_trend = []
+    if "Ticket Created Date" in df.columns:
+        created_by_month = df["Ticket Created Date"].dropna().dt.to_period("M").value_counts()
+        completed_col = df["Ticket Completed Date"] if "Ticket Completed Date" in df.columns else pd.Series(dtype="datetime64[ns]")
+        completed_by_month = completed_col.dropna().dt.to_period("M").value_counts()
+        all_months = sorted(set(created_by_month.index) | set(completed_by_month.index))
+        for period in all_months:
+            monthly_trend.append({
+                "month": str(period),
+                "label": period.strftime("%b %Y"),
+                "created": int(created_by_month.get(period, 0)),
+                "completed": int(completed_by_month.get(period, 0)),
+            })
+
+    # Monthly trend broken down by project (tickets raised per month, one
+    # series per project) -- capped to the top few projects by ticket
+    # volume (project_counts is already sorted, just by open count instead,
+    # so re-sort by total here) and the rest folded into "Other", the same
+    # "don't let a long tail make the chart unreadable" rule a chart
+    # library's own top-N grouping would apply. A project with only a
+    # handful of tickets barely shows up on a monthly chart anyway.
+    monthly_trend_by_project = []
+    if "Project" in df.columns and "Ticket Created Date" in df.columns and all_months:
+        MAX_PROJECT_SERIES = 6
+        ranked_projects = sorted(project_counts, key=lambda p: p["total"], reverse=True)
+        top_projects = {p["project"] for p in ranked_projects[:MAX_PROJECT_SERIES]}
+        pdf_ = df.copy()
+        pdf_["_report_project"] = pdf_["Project"].fillna("(No Project)").astype(str)
+        pdf_["_report_project"] = pdf_["_report_project"].where(pdf_["_report_project"].isin(top_projects), "Other")
+        for project, group in pdf_.groupby("_report_project"):
+            created_pm = group["Ticket Created Date"].dropna().dt.to_period("M").value_counts()
+            points = [{"month": str(p), "label": p.strftime("%b %Y"), "created": int(created_pm.get(p, 0))} for p in all_months]
+            monthly_trend_by_project.append({"project": project, "points": points})
+        # "Other" (if present) always last regardless of its volume -- it's
+        # a catch-all bucket, not a project competing for rank.
+        monthly_trend_by_project.sort(key=lambda s: (s["project"] == "Other", -sum(pt["created"] for pt in s["points"])))
+
+    return {
+        "client": client,
+        "category": category,
+        "generated_at": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+        "metrics": metrics,
+        "status_counts": status_counts,
+        "priority_counts": priority_counts,
+        "project_counts": project_counts,
+        "tickets": tickets,
+        "resolution": {
+            "avg_days": avg_days,
+            "median_days": median_days,
+            "sla_compliance_pct": sla_compliance_pct,
+        },
+        "ageing_buckets": ageing_buckets,
+        "monthly_trend": monthly_trend,
+        "monthly_trend_by_project": monthly_trend_by_project,
+        "attention": {
+            "open_tickets": open_tickets,
+            "sla_breaches": sla_breaches,
+        },
+    }
+
+
 def build_overall_client_charts(df, tickets_df=None, project_df=None):
     charts = {}
     if df.empty:
@@ -1723,6 +1914,27 @@ def api_project_report_data():
     if data is None:
         label = f"{client} / {projek_name}" if projek_name else client
         return jsonify({"success": False, "error": f"No project data found for {label}"}), 404
+    return jsonify({"success": True, "data": data})
+
+
+@app.route("/api/ticket_report_data")
+def api_ticket_report_data():
+    """Feeds the client-side PDF/PPTX report (pdfmake/pptxgenjs, see
+    dashboard.html) for a client's Warranty or Maintenance tickets --
+    generation happens entirely in the browser, this just hands back the
+    JSON, scoped the same way tab_2/tab_7 themselves are."""
+    ensure_schema()
+    client = request.args.get("client") or ""
+    category = request.args.get("category") or ""
+    if not client or category not in ("Warranty", "Maintenance"):
+        return jsonify({"success": False, "error": "client and category (Warranty or Maintenance) are required"}), 400
+    try:
+        data = build_ticket_report_data(client, category)
+    except Exception as e:
+        log(f"Ticket report data error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if data is None:
+        return jsonify({"success": False, "error": f"No {category} data found for {client}"}), 404
     return jsonify({"success": True, "data": data})
 
 
