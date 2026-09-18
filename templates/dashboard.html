@@ -1315,18 +1315,20 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
       var cells = table.querySelectorAll('td.editable-cell');
       cells.forEach(function(cell) {
         cell.innerHTML = buildEditableCellInput(cell);
-        var inp = cell.querySelector('input');
-        inp.addEventListener('input', function() {
+        var inp = cell.querySelector('input, select');
+        var markChanged = function() {
           if (this.value !== this.getAttribute('data-original')) {
             this.classList.add('changed');
           } else {
             this.classList.remove('changed');
           }
-        });
+        };
+        inp.addEventListener('input', markChanged);
+        if (inp.tagName === 'SELECT') inp.addEventListener('change', markChanged);
       });
     } else {
       table.querySelectorAll('tr[data-new-row="true"]').forEach(function(tr) { tr.remove(); });
-      var inputs = table.querySelectorAll('td.editable-cell input');
+      var inputs = table.querySelectorAll('td.editable-cell input, td.editable-cell select');
       inputs.forEach(function(inp) {
         revertEditableCellToText(inp.parentNode, inp);
       });
@@ -1341,7 +1343,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
 
   function save() {
     var pending = [];
-    var inputs = table.querySelectorAll('td.editable-cell input');
+    var inputs = table.querySelectorAll('td.editable-cell input, td.editable-cell select');
     inputs.forEach(function(inp) {
       var tr = inp.closest('tr');
       if (tr.getAttribute('data-new-row') === 'true') return;
@@ -1457,12 +1459,28 @@ function isoToDdmmyyyy(text) {
   if (!m) return text || '';
   return m[3] + '/' + m[2] + '/' + m[1];
 }
+/* Ageing is meant to be one of these three buckets, not free text -- a
+   dropdown stops a typo (or a copy-pasted Status value, e.g. MTIB's
+   warranty tickets literally having "Pending" here) from ever landing in
+   the column again. The current value is always included as an option
+   (even if it isn't one of the three) so an existing bad value is visible
+   and must be actively corrected, not silently overwritten. */
+var AGEING_OPTIONS = ['1-30 Days', '31-60 Days', '> 60 Days'];
 function buildEditableCellInput(cell) {
   var col = cell.getAttribute('data-col');
   var val = cell.textContent.trim();
   if (isDateColumn(col)) {
     var iso = ddmmyyyyToIso(val);
     return '<input type="date" value="' + iso + '" data-original="' + iso + '">';
+  }
+  if (col === 'Ageing') {
+    var ageOptions = AGEING_OPTIONS.slice();
+    if (val && ageOptions.indexOf(val) === -1) ageOptions.unshift(val);
+    ageOptions.unshift('');
+    var optsHtml = ageOptions.map(function(o) {
+      return '<option value="' + escapeHtml(o) + '"' + (o === val ? ' selected' : '') + '>' + (o === '' ? '(blank)' : escapeHtml(o)) + '</option>';
+    }).join('');
+    return '<select data-original="' + escapeHtml(val) + '">' + optsHtml + '</select>';
   }
   if (col === 'Percentage') {
     var n = parseFloat(val);
@@ -1534,7 +1552,7 @@ function collectNewRows(scopeEl) {
   var rows = [];
   scopeEl.querySelectorAll('tr[data-new-row="true"]').forEach(function(tr) {
     var values = {}, hasAny = false;
-    tr.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+    tr.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
       var col = inp.closest('td').getAttribute('data-col');
       var v = inp.value.trim();
       if (v !== '') hasAny = true;
@@ -1644,17 +1662,19 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
         t.querySelectorAll('.end-date-badge').forEach(function(b) { b.remove(); });
         t.querySelectorAll('td.editable-cell').forEach(function(cell) {
           cell.innerHTML = buildEditableCellInput(cell);
-          var inp = cell.querySelector('input');
-          inp.addEventListener('input', function() {
+          var inp = cell.querySelector('input, select');
+          var markChanged = function() {
             this.classList.toggle('changed', this.value !== this.getAttribute('data-original'));
-          });
+          };
+          inp.addEventListener('input', markChanged);
+          if (inp.tagName === 'SELECT') inp.addEventListener('change', markChanged);
           if (cell.getAttribute('data-col') === 'Percentage') {
             inp.addEventListener('change', function() { syncPercentageInput(this); });
             inp.addEventListener('blur', function() { syncPercentageInput(this); });
           }
         });
       } else {
-        t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+        t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
           revertEditableCellToText(inp.parentNode, inp);
         });
       }
@@ -1668,7 +1688,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
   function save() {
     var pending = [];
     getTables().forEach(function(t) {
-      t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+      t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
         var tr = inp.closest('tr');
         if (tr.getAttribute('data-new-row') === 'true') return;
         var original = inp.getAttribute('data-original');
@@ -1773,7 +1793,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
 var editTables = [
   ['warranty-table', 'saveBtn2', 'cancelBtn2', 'editBtn2', {
     btnId: 'addRowBtn2', dbTable: 'tickets',
-    columns: ['Ticket No', 'Task Type', 'Project', 'Company', 'Ticket Title', 'Priority', 'Ticket Status', 'Ticket Created Date', 'Days'],
+    columns: ['Ticket No', 'Task Type', 'Project', 'Company', 'Ticket Title', 'Priority', 'Ticket Status', 'Ticket Created Date', 'Days', 'Ageing'],
     fixedValues: {'Client': 'Client Warranty'}
   }],
   ['project-table', 'saveBtn3', 'cancelBtn3', 'editBtn3', {
@@ -3667,17 +3687,19 @@ function toggleEdit8() {
     if (!editMode) {
       t.querySelectorAll('td.editable-cell').forEach(function(cell) {
         cell.innerHTML = buildEditableCellInput(cell);
-        var inp = cell.querySelector('input');
-        inp.addEventListener('input', function() {
+        var inp = cell.querySelector('input, select');
+        var markChanged = function() {
           if (this.value !== this.getAttribute('data-original')) {
             this.classList.add('changed');
           } else {
             this.classList.remove('changed');
           }
-        });
+        };
+        inp.addEventListener('input', markChanged);
+        if (inp.tagName === 'SELECT') inp.addEventListener('change', markChanged);
       });
     } else {
-      t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+      t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
         revertEditableCellToText(inp.parentNode, inp);
       });
     }
@@ -3688,7 +3710,7 @@ function saveChanges8() {
   var pending = [];
   var tables = document.querySelectorAll('#tab-8 table');
   tables.forEach(function(t) {
-    t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+    t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
       var original = inp.getAttribute('data-original');
       if (inp.value !== original) {
         var td = inp.parentNode;
