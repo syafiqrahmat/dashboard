@@ -256,7 +256,7 @@ def build_warranty_charts(df):
         fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False, xaxis_tickangle=-45)
         charts["project_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    display_cols = ["Ticket No", "Task Type", "Project", "Company", "Ticket Title", "Priority", "Ticket Status", "Ticket Created Date", "Days"]
+    display_cols = ["Ticket No", "Task Type", "Project", "Company", "Ticket Title", "Priority", "Ticket Status", "Ticket Created Date", "Days", "Ageing"]
     avail = [c for c in display_cols if c in warranty_df.columns]
     meta_cols = [c for c in ["_row_idx", "Source File"] if c in warranty_df.columns]
     detail = warranty_df[avail + meta_cols].copy()
