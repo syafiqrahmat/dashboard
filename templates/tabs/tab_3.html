@@ -5,15 +5,17 @@
   <div class="metric-card"><div class="val" style="color:var(--info)">{{ project_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
   <div class="metric-card"><div class="val" style="color:var(--neutral)">{{ project_charts.metrics.not_started }}</div><div class="lbl">Not Started</div></div>
 </div>
+{% if single_client_mode %}
+<div class="edit-bar" style="margin-bottom:14px">
+  <span style="flex:1"></span>
+  <button class="btn-pill" type="button" onclick="downloadProjectReport(this)">&#128196; Download Report (PDF)</button>
+  <button class="btn-pill" type="button" onclick="downloadProjectReportPptx(this)">&#128202; Download Report (PPTX)</button>
+</div>
+{% endif %}
 <div class="chart-row">
   <div class="chart-box">{{ project_charts.client_bar|safe }}</div>
   <div class="chart-box">{{ project_charts.status_pie|safe }}</div>
 </div>
-{% if project_charts.timeline_chart %}
-<div class="chart-full"><h3>PROJECT DEVELOPMENT TIMELINE</h3>{{ project_charts.timeline_chart|safe }}</div>
-{% else %}
-<div class="alert alert-warning">No timeline data</div>
-{% endif %}
 <div class="chart-full">
   <h3>Project Details</h3>
   <div class="edit-bar" style="margin-bottom:4px">
@@ -27,6 +29,7 @@
     <table id="project-table">
       <thead>
         <tr>
+          <th class="row-actions-cell">Actions</th>
           {% if project_charts.detail_data and project_charts.detail_data[0] is defined %}
           {% set skip_cols_3 = ['_row_idx', '_source_file', '_op_rowspan'] %}
           {% for key in project_charts.detail_data[0].keys() %}
@@ -42,12 +45,21 @@
         {% for row in project_charts.detail_data %}
           {% if row.get('_op_rowspan', 1) > 0 %}{% set ns_op.group = ns_op.group + 1 %}{% endif %}
         <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('_source_file', '') }}" data-sheet="Client Project" data-op-group="{{ ns_op.group }}" class="{{ 'title-group-start' if row.get('_op_rowspan', 1) > 0 else '' }}">
+          <td class="row-actions-cell" data-row-idx="{{ row.get('_row_idx', '') }}">
+            {% if row.get('_op_rowspan', 1) > 0 %}
+            <button type="button" class="btn-row-action btn-module-up" title="Move whole module up">&#9650;&#9650;</button>
+            <button type="button" class="btn-row-action btn-module-down" title="Move whole module down">&#9660;&#9660;</button>
+            {% endif %}
+            <button type="button" class="btn-row-action btn-row-up" title="Move row up">&#9650;</button>
+            <button type="button" class="btn-row-action btn-row-down" title="Move row down">&#9660;</button>
+            <button type="button" class="btn-row-action btn-row-delete" title="Delete row">&times;</button>
+          </td>
           {% for key, val in row.items() %}
             {% if key == 'Overall Progress Task (%)' %}
               {% if row.get('_op_rowspan', 1) > 0 %}
               <td class="op-merged-cell" id="op-cell-{{ ns_op.group }}" rowspan="{{ row.get('_op_rowspan', 1) }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
               {% endif %}
-            {% elif key in ('Progress', 'Status Progress') %}
+            {% elif key in ('Progress', 'Status Progress', 'Duration') %}
             <td class="derived-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
             {% elif key not in skip_cols_3 %}
             <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
@@ -59,6 +71,11 @@
     </table>
   </div>
 </div>
+{% if project_charts.timeline_chart %}
+<div class="chart-full"><h3>PROJECT DEVELOPMENT TIMELINE</h3>{{ project_charts.timeline_chart|safe }}</div>
+{% else %}
+<div class="alert alert-warning">No timeline data</div>
+{% endif %}
 {% else %}
 <div class="alert alert-warning">
   {% if single_client_mode %}

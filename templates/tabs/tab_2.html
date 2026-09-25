@@ -6,6 +6,13 @@
   <div class="metric-card"><div class="val" style="color:var(--danger)">{{ warranty_charts.metrics.in_progress }}</div><div class="lbl">In Progress</div></div>
   <div class="metric-card"><div class="val" style="color:var(--danger)">{{ warranty_charts.metrics.sla_breach }}</div><div class="lbl">SLA Breaches</div></div>
 </div>
+{% if single_client_mode %}
+<div class="edit-bar" style="margin-bottom:14px">
+  <span style="flex:1"></span>
+  <button class="btn-pill" type="button" onclick="downloadTicketReport(this, 'Warranty')">&#128196; Download Report (PDF)</button>
+  <button class="btn-pill" type="button" onclick="downloadTicketReportPptx(this, 'Warranty')">&#128202; Download Report (PPTX)</button>
+</div>
+{% endif %}
 <div class="chart-row">
   <div class="chart-box">{{ warranty_charts.status_pie|safe }}</div>
   <div class="chart-box">{{ warranty_charts.task_type_bar|safe }}</div>

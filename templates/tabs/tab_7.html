@@ -1,6 +1,10 @@
 <div class="edit-bar">
   <span style="color:#667085;font-weight:600">Total records: {{ data_info.total_filtered }}</span>
   <span style="flex:1"></span>
+  {% if single_client_mode and client_category == 'Maintenance' %}
+  <button class="btn-pill" type="button" onclick="downloadTicketReport(this, 'Maintenance')">&#128196; Download Report (PDF)</button>
+  <button class="btn-pill" type="button" onclick="downloadTicketReportPptx(this, 'Maintenance')">&#128202; Download Report (PPTX)</button>
+  {% endif %}
   <button class="btn-add-row admin-only" id="addTicketBtn" type="button" style="display:none">+ Add Ticket</button>
   <button class="btn-save" id="saveBtn" onclick="saveChanges()" style="display:none">Save Changes</button>
   <button class="btn-cancel" id="cancelBtn" onclick="cancelEdit()" style="display:none">Cancel</button>

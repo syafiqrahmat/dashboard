@@ -16,6 +16,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js"></script>
 <style>
 :root{
   --bg:#eef1f6;
@@ -265,12 +268,15 @@ body::after{
 }
 .client-link:hover{text-decoration:underline}
 
-/* ---------- End Date corner banner (Overall Client tab) ---------- */
-.end-date-cell{position:relative}
+/* ---------- End Date badge (Overall Client tab) ----------
+   Rendered in its own trailing column so it always sits at the end of the
+   row, no matter how many columns (Technology, ticket totals, ...) come
+   between it and the End Date column itself. */
+.end-date-badge-cell{white-space:nowrap;text-align:center}
 .end-date-badge{
-  position:absolute;top:2px;right:2px;padding:1px 6px;border-radius:4px;
+  display:inline-block;padding:1px 6px;border-radius:4px;
   font-size:0.62rem;font-weight:800;letter-spacing:0.3px;text-transform:uppercase;
-  line-height:1.5;pointer-events:none;box-shadow:0 1px 3px rgba(0,0,0,0.25);
+  line-height:1.5;box-shadow:0 1px 3px rgba(0,0,0,0.25);
   animation:endDateBadgeIn 0.35s ease-out;
 }
 .end-date-badge.due-soon{background:#f5c518;color:#5c4600}
@@ -285,6 +291,15 @@ tr[data-new-row="true"]{background:rgba(44,95,130,0.05)}
 .btn-add-row{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 14px;
   font-size:0.8rem;font-weight:600;cursor:pointer;margin-right:8px}
 .btn-add-row:hover{opacity:0.9}
+.row-actions-cell{display:none;white-space:nowrap;text-align:center;background:rgba(0,0,0,0.02)}
+table.edit-mode .row-actions-cell{display:table-cell}
+.btn-row-action{width:22px;height:22px;line-height:20px;padding:0;margin:1px;
+  border:1px solid var(--border-strong);border-radius:5px;background:#fff;color:var(--text-dim);
+  font-size:0.65rem;cursor:pointer;text-align:center}
+.btn-row-action:hover{border-color:var(--accent);color:var(--accent)}
+.btn-row-delete{border-color:var(--danger);color:var(--danger)}
+.btn-row-delete:hover{background:var(--danger);color:#fff}
+.btn-module-up,.btn-module-down{color:var(--accent);border-color:var(--accent)}
 @keyframes endDateBadgeIn{
   0%{opacity:0;transform:translateY(-4px) scale(0.85)}
   100%{opacity:1;transform:translateY(0) scale(1)}
@@ -362,6 +377,7 @@ tbody tr:hover{background:rgba(20,32,50,0.03)}
 .client-section summary::-webkit-details-marker{display:none}
 .client-section summary:hover{background:rgba(44,95,130,0.14)}
 .client-section details{margin-bottom:8px}
+.gantt-title-card-body{padding-top:6px}
 
 /* ---------- Alerts ---------- */
 .alert{
@@ -370,6 +386,10 @@ tbody tr:hover{background:rgba(20,32,50,0.03)}
 }
 .alert-warning{border-color:rgba(194,118,12,0.3);background:rgba(194,118,12,0.08);color:#92400e}
 .alert-info{border-color:rgba(37,99,235,0.3);background:rgba(37,99,235,0.08);color:#1e40af}
+.disclaimer-note{
+  border-radius:var(--radius-sm);padding:10px 14px;margin:0 0 12px;font-size:0.78rem;line-height:1.5;
+  border:1px solid rgba(37,99,235,0.25);background:rgba(37,99,235,0.06);color:#1e3a8a;
+}
 
 .sidebar-hr{margin:0.8rem 0;border:none;border-top:1px solid #d0d5dd}
 hr{border-color:#d0d5dd;margin:1.2rem 0}
@@ -387,6 +407,7 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 .edit-mode td input.changed{background:#fff3cd;border-color:#f39c12}
 .editable-cell{cursor:pointer}
 .editable-cell:hover{background:#f0f7ff}
+.stat-cell{text-align:center;font-weight:600;color:var(--accent, #2c3e50)}
 .op-merged-cell{
   text-align:center;font-weight:700;color:var(--accent);
   background:rgba(44,95,130,0.1);border-left:3px solid var(--accent);border-right:3px solid var(--accent);
@@ -411,6 +432,13 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 .btn-pill.primary:hover{box-shadow:0 8px 22px rgba(44,95,130,0.42)}
 .btn-pill.danger{color:var(--danger);border-color:rgba(220,38,38,0.3)}
 .btn-pill.danger:hover{background:rgba(220,38,38,0.08)}
+.btn-pill:disabled{opacity:0.65;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+.btn-spinner{
+  display:inline-block;width:12px;height:12px;flex-shrink:0;
+  border:2px solid rgba(0,0,0,0.15);border-top-color:currentColor;border-radius:50%;
+  animation:btn-spin .7s linear infinite;
+}
+@keyframes btn-spin{to{transform:rotate(360deg)}}
 .data-pill{
   font-size:0.72rem;font-weight:600;color:var(--text-dim);padding:6px 12px;border-radius:999px;
   background:rgba(255,255,255,0.6);border:1px solid var(--border);
@@ -618,7 +646,7 @@ body.role-admin .viewer-only-note{display:none}
     {% else %}
     <div class="sidebar-header">Sections</div>
     <nav class="sidebar-list">
-      <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(9, this)">Overall Client</button>
+      <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(9, this)">Home</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(0, this)">Overview</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(1, this)">Maintenance</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(2, this)">Warranty</button>
@@ -653,6 +681,7 @@ body.role-admin .viewer-only-note{display:none}
     </button>
     <button type="button" class="btn-pill" onclick="refreshWithSplash()">&#10227; Refresh</button>
     <button type="button" class="btn-pill primary admin-only" onclick="openUploadModal()">&#8593; Upload Data</button>
+    <button type="button" class="btn-pill admin-only" id="syncMysupportBtn" onclick="doSyncMysupport()">&#8635; Sync from mysupport</button>
     <button type="button" class="btn-pill danger admin-only" onclick="openRestartModal()">&#8635; Reset Database</button>
     <button type="button" class="btn-pill" id="installAppBtn" onclick="installApp()" style="display:none">&#8615; Install App</button>
     <button type="button" class="btn-pill" id="roleSwitchBtn" onclick="openRoleModal()">&#9881;&#65039; <span id="roleSwitchLabel">Role</span></button>
@@ -1016,21 +1045,22 @@ function toggleSidebar() {
     if (sb) sb.classList.add('collapsed');
   });
 })();
-/* ---------- End Date corner banner (Overall Client tab) ----------
-   Flags rows whose End Date is within the next 7 days (yellow "Due Soon")
-   or already in the past (red "Overdue"). Runs after render since the
-   dates are baked into the table as plain dd/mm/yyyy text server-side. */
+/* ---------- End Date badge (Overall Client tab) ----------
+   Flags rows whose End Date is within the next month (yellow "Due Soon")
+   or already in the past (red "Overdue"), rendered into the row's own
+   trailing badge cell so it always lands at the end of the row rather
+   than wherever the End Date column happens to sit. Runs after render
+   since the dates are baked into the table as plain dd/mm/yyyy text
+   server-side. */
 function applyEndDateBadges() {
-  var cells = document.querySelectorAll('.end-date-cell');
+  var cells = document.querySelectorAll('.end-date-badge-cell');
   if (!cells.length) return;
   var today = new Date();
   today.setHours(0, 0, 0, 0);
-  var SOON_DAYS = 7;
+  var SOON_DAYS = 30;
   cells.forEach(function(cell) {
-    var existing = cell.querySelector('.end-date-badge');
-    if (existing) existing.remove();
-    if (cell.querySelector('input')) return;
-    var text = cell.textContent.trim();
+    cell.innerHTML = '';
+    var text = (cell.getAttribute('data-end-date') || '').trim();
     var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
     if (!m) return;
     var due = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
@@ -1081,6 +1111,89 @@ document.addEventListener('click', function(e) {
   selectClient(cell.getAttribute('data-client'), cell.getAttribute('data-status'), cell.getAttribute('data-projek-name'));
 });
 
+/* ---------- Project Details: row/module reordering & row delete ------
+   These hit the database immediately (no "pending changes, then Save")
+   and reload the page on success, the same way Reset Database does --
+   there's no meaningful "cancel" for a reorder or a delete once clicked,
+   so there's nothing useful to stage client-side first. */
+function postReorderRows(ids) {
+  return fetch('/api/reorder_rows', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({table: 'projects', ids: ids})
+  }).then(function(r) { return r.json(); });
+}
+function postDeleteRow(dbTable, rowIdx) {
+  return fetch('/api/delete_row', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({table: dbTable, row_idx: rowIdx})
+  }).then(function(r) { return r.json(); });
+}
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.btn-row-action');
+  if (!btn) return;
+  var table = btn.closest('table');
+  if (!table || table.id !== 'project-table') return;
+  var tr = btn.closest('tr');
+  if (!tr || tr.getAttribute('data-new-row') === 'true') return;
+
+  function rowsInGroup(groupId) {
+    return Array.from(table.querySelectorAll('tr[data-op-group="' + groupId + '"]'));
+  }
+  function idOf(r) { return r.getAttribute('data-row-idx'); }
+
+  if (btn.classList.contains('btn-row-delete')) {
+    if (!confirm('Delete this row? This cannot be undone.')) return;
+    postDeleteRow('projects', idOf(tr)).then(function(result) {
+      if (result.success) window.location.reload();
+      else showToast('Delete failed: ' + (result.error || 'unknown'), 'error');
+    }).catch(function(err) { showToast('Delete failed: ' + err.message, 'error'); });
+    return;
+  }
+
+  if (btn.classList.contains('btn-row-up') || btn.classList.contains('btn-row-down')) {
+    var up = btn.classList.contains('btn-row-up');
+    var siblings = rowsInGroup(tr.getAttribute('data-op-group'));
+    var idx = siblings.indexOf(tr);
+    var swapWith = up ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= siblings.length) {
+      showToast('Already at the ' + (up ? 'top' : 'bottom') + ' of this module', 'success');
+      return;
+    }
+    var ids = siblings.map(idOf);
+    var tmp = ids[idx]; ids[idx] = ids[swapWith]; ids[swapWith] = tmp;
+    postReorderRows(ids).then(function(result) {
+      if (result.success) window.location.reload();
+      else showToast('Reorder failed: ' + (result.error || 'unknown'), 'error');
+    }).catch(function(err) { showToast('Reorder failed: ' + err.message, 'error'); });
+    return;
+  }
+
+  if (btn.classList.contains('btn-module-up') || btn.classList.contains('btn-module-down')) {
+    var moveUp = btn.classList.contains('btn-module-up');
+    var thisGroupId = tr.getAttribute('data-op-group');
+    var allGroupIds = [];
+    table.querySelectorAll('tbody tr').forEach(function(r) {
+      var gid = r.getAttribute('data-op-group');
+      if (allGroupIds.indexOf(gid) === -1) allGroupIds.push(gid);
+    });
+    var gIdx = allGroupIds.indexOf(thisGroupId);
+    var otherIdx = moveUp ? gIdx - 1 : gIdx + 1;
+    if (otherIdx < 0 || otherIdx >= allGroupIds.length) {
+      showToast('Already at the ' + (moveUp ? 'top' : 'bottom'), 'success');
+      return;
+    }
+    var thisIds = rowsInGroup(thisGroupId).map(idOf);
+    var otherIds = rowsInGroup(allGroupIds[otherIdx]).map(idOf);
+    var newIds = moveUp ? thisIds.concat(otherIds) : otherIds.concat(thisIds);
+    postReorderRows(newIds).then(function(result) {
+      if (result.success) window.location.reload();
+      else showToast('Reorder failed: ' + (result.error || 'unknown'), 'error');
+    }).catch(function(err) { showToast('Reorder failed: ' + err.message, 'error'); });
+  }
+});
+
 /* Script tags set via .innerHTML never execute (a browser/DOM spec
    quirk, not a bug in this code) -- but every Plotly chart in a tab
    fragment is exactly a div plus a script tag calling Plotly.newPlot(...),
@@ -1107,10 +1220,31 @@ function resizeTabCharts(idx) {
     if (gd && gd._fullLayout) { Plotly.Plots.resize(gd); }
   });
 }
+/* Gantt charts on the Project page are hidden inside a collapsed
+   <details class="gantt-title-card"> per module until clicked open --
+   Plotly measures its container at render time, so a chart drawn (or
+   resized by resizeTabCharts above) while its card is still closed comes
+   out zero-size and never fixes itself on its own. Resize it again right
+   when its card opens, once the browser has actually given the now-
+   visible container real dimensions. */
+function wireGanttCards() {
+  document.querySelectorAll('.gantt-title-card').forEach(function(card) {
+    if (card.dataset.ganttWired) return;
+    card.dataset.ganttWired = '1';
+    card.addEventListener('toggle', function() {
+      if (!card.open) return;
+      card.querySelectorAll('.plotly-graph-div').forEach(function(c) {
+        var gd = document.getElementById(c.id);
+        if (gd && gd._fullLayout) { Plotly.Plots.resize(gd); }
+      });
+    });
+  });
+}
 function afterTabLoad(idx) {
   resizeTabCharts(idx);
   applyEndDateBadges();
   wireEditTables();
+  wireGanttCards();
 }
 /* ---------- Lazy tab loading ----------
    Only the tab active on first page load is rendered server-side (see
@@ -1181,18 +1315,20 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
       var cells = table.querySelectorAll('td.editable-cell');
       cells.forEach(function(cell) {
         cell.innerHTML = buildEditableCellInput(cell);
-        var inp = cell.querySelector('input');
-        inp.addEventListener('input', function() {
+        var inp = cell.querySelector('input, select');
+        var markChanged = function() {
           if (this.value !== this.getAttribute('data-original')) {
             this.classList.add('changed');
           } else {
             this.classList.remove('changed');
           }
-        });
+        };
+        inp.addEventListener('input', markChanged);
+        if (inp.tagName === 'SELECT') inp.addEventListener('change', markChanged);
       });
     } else {
       table.querySelectorAll('tr[data-new-row="true"]').forEach(function(tr) { tr.remove(); });
-      var inputs = table.querySelectorAll('td.editable-cell input');
+      var inputs = table.querySelectorAll('td.editable-cell input, td.editable-cell select');
       inputs.forEach(function(inp) {
         revertEditableCellToText(inp.parentNode, inp);
       });
@@ -1207,7 +1343,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
 
   function save() {
     var pending = [];
-    var inputs = table.querySelectorAll('td.editable-cell input');
+    var inputs = table.querySelectorAll('td.editable-cell input, td.editable-cell select');
     inputs.forEach(function(inp) {
       var tr = inp.closest('tr');
       if (tr.getAttribute('data-new-row') === 'true') return;
@@ -1306,7 +1442,9 @@ function escapeHtml(text) {
    and could silently save the wrong date). ---------- */
 var DATE_COLUMNS = [
   'Ticket Created Date', 'Ticket Completed Date', 'Ticket Closed Date',
-  'Start Date', 'End Date', 'Start date', 'Due date', 'Target Date',
+  'Start Date', 'End Date',
+  'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
+  'Actual Start Date', 'Actual End Date',
 ];
 function isDateColumn(col) {
   return DATE_COLUMNS.indexOf(col) !== -1;
@@ -1321,12 +1459,28 @@ function isoToDdmmyyyy(text) {
   if (!m) return text || '';
   return m[3] + '/' + m[2] + '/' + m[1];
 }
+/* Ageing is meant to be one of these three buckets, not free text -- a
+   dropdown stops a typo (or a copy-pasted Status value, e.g. MTIB's
+   warranty tickets literally having "Pending" here) from ever landing in
+   the column again. The current value is always included as an option
+   (even if it isn't one of the three) so an existing bad value is visible
+   and must be actively corrected, not silently overwritten. */
+var AGEING_OPTIONS = ['1-30 Days', '31-60 Days', '> 60 Days'];
 function buildEditableCellInput(cell) {
   var col = cell.getAttribute('data-col');
   var val = cell.textContent.trim();
   if (isDateColumn(col)) {
     var iso = ddmmyyyyToIso(val);
     return '<input type="date" value="' + iso + '" data-original="' + iso + '">';
+  }
+  if (col === 'Ageing') {
+    var ageOptions = AGEING_OPTIONS.slice();
+    if (val && ageOptions.indexOf(val) === -1) ageOptions.unshift(val);
+    ageOptions.unshift('');
+    var optsHtml = ageOptions.map(function(o) {
+      return '<option value="' + escapeHtml(o) + '"' + (o === val ? ' selected' : '') + '>' + (o === '' ? '(blank)' : escapeHtml(o)) + '</option>';
+    }).join('');
+    return '<select data-original="' + escapeHtml(val) + '">' + optsHtml + '</select>';
   }
   if (col === 'Percentage') {
     var n = parseFloat(val);
@@ -1361,6 +1515,13 @@ function addBlankRow(table, columns) {
   var tr = document.createElement('tr');
   tr.setAttribute('data-new-row', 'true');
   var removeBtnPlaced = false;
+  // Only project-table's header has a leading Actions column (row/module
+  // move + delete buttons -- meaningless for a row that isn't saved yet),
+  // so match it here too or every real column would shift one cell to
+  // the right of its header.
+  if (table.querySelector('thead th.row-actions-cell')) {
+    tr.appendChild(document.createElement('td')).className = 'row-actions-cell';
+  }
   columns.forEach(function(spec) {
     var col = typeof spec === 'string' ? spec : spec.col;
     var derived = typeof spec === 'object' && spec.derived;
@@ -1391,7 +1552,7 @@ function collectNewRows(scopeEl) {
   var rows = [];
   scopeEl.querySelectorAll('tr[data-new-row="true"]').forEach(function(tr) {
     var values = {}, hasAny = false;
-    tr.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+    tr.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
       var col = inp.closest('td').getAttribute('data-col');
       var v = inp.value.trim();
       if (v !== '') hasAny = true;
@@ -1501,17 +1662,19 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
         t.querySelectorAll('.end-date-badge').forEach(function(b) { b.remove(); });
         t.querySelectorAll('td.editable-cell').forEach(function(cell) {
           cell.innerHTML = buildEditableCellInput(cell);
-          var inp = cell.querySelector('input');
-          inp.addEventListener('input', function() {
+          var inp = cell.querySelector('input, select');
+          var markChanged = function() {
             this.classList.toggle('changed', this.value !== this.getAttribute('data-original'));
-          });
+          };
+          inp.addEventListener('input', markChanged);
+          if (inp.tagName === 'SELECT') inp.addEventListener('change', markChanged);
           if (cell.getAttribute('data-col') === 'Percentage') {
             inp.addEventListener('change', function() { syncPercentageInput(this); });
             inp.addEventListener('blur', function() { syncPercentageInput(this); });
           }
         });
       } else {
-        t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+        t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
           revertEditableCellToText(inp.parentNode, inp);
         });
       }
@@ -1525,7 +1688,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
   function save() {
     var pending = [];
     getTables().forEach(function(t) {
-      t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+      t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
         var tr = inp.closest('tr');
         if (tr.getAttribute('data-new-row') === 'true') return;
         var original = inp.getAttribute('data-original');
@@ -1630,19 +1793,23 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
 var editTables = [
   ['warranty-table', 'saveBtn2', 'cancelBtn2', 'editBtn2', {
     btnId: 'addRowBtn2', dbTable: 'tickets',
-    columns: ['Ticket No', 'Task Type', 'Project', 'Company', 'Ticket Title', 'Priority', 'Ticket Status', 'Ticket Created Date', 'Days'],
+    columns: ['Ticket No', 'Task Type', 'Project', 'Company', 'Ticket Title', 'Priority', 'Ticket Status', 'Ticket Created Date', 'Days', 'Ageing'],
     fixedValues: {'Client': 'Client Warranty'}
   }],
   ['project-table', 'saveBtn3', 'cancelBtn3', 'editBtn3', {
     btnId: 'addRowBtn3', dbTable: 'projects',
     // Order/count must match tab_3.html's <thead> exactly (display_cols_p
-    // in api/index.py) -- Progress/Status Progress/Overall Progress Task (%)
-    // are derived placeholders here (not sent to /api/add_row) purely to
-    // keep the new row's cells aligned under the right header columns.
+    // in api/index.py) -- Progress/Status Progress/Duration/Overall
+    // Progress Task (%) are derived placeholders here (not sent to
+    // /api/add_row) purely to keep the new row's cells aligned under the
+    // right header columns.
     columns: [
       'Client', 'Title', 'Projek Name', 'Description', 'Category',
       {col: 'Progress', derived: true, placeholder: 'Not Started'},
-      'Priority', 'Start date', 'Due date', 'Target Date', 'Duration', 'Assigned to',
+      'Priority', 'Actual Start Date', 'Actual End Date',
+      'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
+      {col: 'Duration', derived: true, placeholder: ''},
+      'Assigned to',
       {col: 'Status Progress', derived: true, placeholder: 'Not Started'},
       'Percentage',
       {col: 'Overall Progress Task (%)', derived: true, placeholder: ''}
@@ -1679,6 +1846,7 @@ function wireEditTables() {
   }
 }
 wireEditTables();
+wireGanttCards();
 
 function toggleEdit() { return false; }
 function saveChanges() { return false; }
@@ -1692,6 +1860,1817 @@ function cancelEdit3() { return false; }
 function toggleEdit9() { return false; }
 function saveChanges9() { return false; }
 function cancelEdit9() { return false; }
+
+/* ---------- Project PDF report (client-side, pdfmake) ----------
+   Generated entirely in the browser (no server-side PDF dependency, no
+   Node.js involved -- pdfmake + vfs_fonts loaded via CDN in <head>)
+   from /api/project_report_data, which itself is derived purely from
+   existing project fields (no hand-written narrative -- see
+   build_project_report_data in api/index.py). */
+var REPORT_BRAND = { name: 'Software Wizard (M) Sdn Bhd', navy: '#1d3f57', accent: '#2c5f82', teal: '#4fa3b8', success: '#0e9f6e', warning: '#c2760c', danger: '#dc2626', dim: '#5a6579' };
+
+function progressColor(pct) {
+  if (pct >= 100) return REPORT_BRAND.success;
+  if (pct >= 50) return REPORT_BRAND.accent;
+  return REPORT_BRAND.warning;
+}
+
+/* dd/mm/yyyy (as returned by the report API) -> Date, or null. Shared by
+   the PDF gantt/attention highlighting and the PPTX gantt below. */
+function reportParseDate(ddmmyyyy) {
+  var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((ddmmyyyy || '').trim());
+  if (!m) return null;
+  return new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+}
+function reportDatePassed(ddmmyyyy) {
+  var d = reportParseDate(ddmmyyyy);
+  if (!d) return false;
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return d < today;
+}
+
+function reportProgressCell(pct) {
+  pct = Math.max(0, Math.min(100, pct || 0));
+  var w = 130, h = 9;
+  return {
+    columns: [
+      { width: w, canvas: [
+        { type: 'rect', x: 0, y: 0, w: w, h: h, r: 4, color: '#e2e8f0' },
+        { type: 'rect', x: 0, y: 0, w: Math.max(w * pct / 100, pct > 0 ? 6 : 0), h: h, r: 4, color: progressColor(pct) }
+      ] },
+      { width: 8, text: '' },
+      { width: 'auto', text: pct.toFixed(0) + '%', bold: true, fontSize: 9, margin: [0, -1, 0, 0] }
+    ]
+  };
+}
+
+/* Shared Gantt-bar table builder for the PDF report -- rows is an array of
+   {label, start, end, percent} (start/end are Date objects, already
+   resolved from whichever date pair the caller cares about). Returns an
+   array of pdfmake content nodes (date-range header + the bar table) to
+   splice into `content` with push.apply, since both the project-wide and
+   per-module charts need the exact same rendering. Pass {showDates: true}
+   to print each row's own Target Start -> Target End date range under its
+   label -- used for the task-level Module Gantt Charts, where the exact
+   dates aren't otherwise shown anywhere near the bar. */
+function pdfGanttTable(rows, opts) {
+  var showDates = !!(opts && opts.showDates);
+  var gMin = new Date(Math.min.apply(null, rows.map(function(r) { return r.start.getTime(); })));
+  var gMax = new Date(Math.max.apply(null, rows.map(function(r) { return r.end.getTime(); })));
+  var gTotal = Math.max(gMax.getTime() - gMin.getTime(), 86400000);
+  var trackW = 360, trackH = 14;
+  var today = new Date();
+  var todayFrac = (today >= gMin && today <= gMax) ? (today.getTime() - gMin.getTime()) / gTotal : null;
+  var out = [];
+  out.push({
+    columns: [
+      { width: 120, text: '' },
+      { width: trackW, columns: [
+        { width: '*', text: gMin.toLocaleDateString('en-GB'), fontSize: 8, color: REPORT_BRAND.dim },
+        { width: '*', text: gMax.toLocaleDateString('en-GB'), fontSize: 8, color: REPORT_BRAND.dim, alignment: 'right' }
+      ] }
+    ],
+    margin: [0, 0, 0, 4]
+  });
+  var body = [];
+  rows.forEach(function(r) {
+    var sf = Math.max(0, Math.min(1, (r.start.getTime() - gMin.getTime()) / gTotal));
+    var ef = Math.max(0, Math.min(1, (r.end.getTime() - gMin.getTime()) / gTotal));
+    var barX = trackW * sf;
+    var barW = Math.max(trackW * (ef - sf), 4);
+    var canvasEls = [
+      { type: 'rect', x: 0, y: 0, w: trackW, h: trackH, r: 3, color: '#e2e8f0' },
+      { type: 'rect', x: barX, y: 0, w: barW, h: trackH, r: 3, color: progressColor(r.percent) }
+    ];
+    if (todayFrac !== null) {
+      var tx = trackW * todayFrac;
+      canvasEls.push({ type: 'line', x1: tx, y1: -2, x2: tx, y2: trackH + 2, lineWidth: 1, lineColor: REPORT_BRAND.danger, dash: { length: 2 } });
+    }
+    var labelCell = showDates
+      ? { stack: [
+          { text: r.label, bold: true, fontSize: 9 },
+          { text: r.start.toLocaleDateString('en-GB') + ' - ' + r.end.toLocaleDateString('en-GB'), fontSize: 7, italics: true, color: REPORT_BRAND.dim }
+        ] }
+      : { text: r.label, bold: true, fontSize: 9 };
+    body.push([
+      labelCell,
+      { canvas: canvasEls },
+      { text: r.percent.toFixed(0) + '%', fontSize: 9, alignment: 'right' }
+    ]);
+  });
+  out.push({ table: { widths: [120, trackW + 4, 34], body: body }, layout: 'noBorders', margin: [0, 0, 0, 20] });
+  return out;
+}
+
+/* Task order for a flow chart -- by Target Start Date where present,
+   original (row) order otherwise, so undated tasks fall back to however
+   they were already listed instead of jumping around. */
+function taskFlowSortKey(t) {
+  var d = reportParseDate(t.target_start);
+  return d ? d.getTime() : Infinity;
+}
+
+/* Module titles and task descriptions in the source sheet often already
+   carry their own leading "1. " numbering -- flow-chart boxes add their
+   own sequence number on top, so strip any number the source data already
+   has first, otherwise a box reads "1. 1. Barkod" instead of "1. Barkod". */
+function stripLeadingNumber(s) {
+  return (s || '').replace(/^\d+\.\s*/, '');
+}
+
+/* Pale fill behind a flow-chart box, keyed to the same three completion
+   tiers as progressColor, so a box reads as "amber/blue/green" at a
+   glance without the border color alone having to carry it. */
+function progressTint(pct) {
+  if (pct >= 100) return '#e3f7ef';
+  if (pct >= 50) return '#e8f0f6';
+  return '#fbf1e3';
+}
+
+/* Small box-by-box flow diagram for the PDF report -- one box per node
+   (a task or a module, whichever the caller passes), wrapped `perRow` to
+   a line and connected left-to-right by a drawn arrow (line + triangle
+   head, not a font glyph, so it renders identically everywhere). When a
+   row wraps, a second down-arrow under the last box of that row shows the
+   sequence continuing into the next row, so a multi-row chart still reads
+   as one single flow rather than several disconnected strips. Kept
+   deliberately compact -- small boxes, small type -- rather than a full
+   diagramming-library flowchart. nodes is [{label, percent, start, end}]
+   (start/end are optional Date objects), already in display order. */
+function pdfFlowChart(nodes) {
+  var perRow = 5, boxW = 84, boxH = 44, arrowW = 20;
+  var out = [];
+  for (var i = 0; i < nodes.length; i += perRow) {
+    var chunk = nodes.slice(i, i + perRow);
+    var cols = [];
+    chunk.forEach(function(n, idx) {
+      var pct = n.percent != null ? n.percent : 0;
+      var color = progressColor(pct);
+      var label = n.label || '(untitled)';
+      if (label.length > 42) label = label.slice(0, 41) + '...';
+      var dateText = (n.start && n.end)
+        ? [{ text: '\n' + n.start.toLocaleDateString('en-GB') + ' - ' + n.end.toLocaleDateString('en-GB'), fontSize: 6.5, italics: true, color: REPORT_BRAND.dim }]
+        : [];
+      cols.push({
+        width: boxW,
+        table: {
+          widths: ['*'],
+          heights: [boxH],
+          body: [[ {
+            text: [
+              { text: (i + idx + 1) + '. ', bold: true, fontSize: 7.5, color: color },
+              { text: label, fontSize: 7.5, color: '#1a1a1a' }
+            ].concat(dateText).concat([
+              { text: '\n' + pct.toFixed(0) + '%', fontSize: 8, bold: true, color: color }
+            ]),
+            fillColor: progressTint(pct),
+            alignment: 'center'
+          } ]]
+        },
+        layout: {
+          hLineWidth: function() { return 1.25; }, vLineWidth: function() { return 1.25; },
+          hLineColor: function() { return color; }, vLineColor: function() { return color; },
+          paddingLeft: function() { return 5; }, paddingRight: function() { return 5; },
+          paddingTop: function() { return 5; }, paddingBottom: function() { return 5; }
+        }
+      });
+      if (idx < chunk.length - 1) {
+        cols.push({
+          width: arrowW,
+          margin: [0, boxH / 2 - 4, 0, 0],
+          canvas: [
+            { type: 'line', x1: 0, y1: 4, x2: arrowW - 8, y2: 4, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+            { type: 'polyline', lineWidth: 0, color: REPORT_BRAND.accent, closePath: true,
+              points: [{ x: arrowW - 10, y: 0 }, { x: arrowW - 2, y: 4 }, { x: arrowW - 10, y: 8 }] }
+          ]
+        });
+      }
+    });
+    out.push({ columns: cols, columnGap: 0, margin: [0, 0, 0, 6] });
+    // When a row wraps, the next row's first box starts back at the left
+    // margin, not directly under this row's last box -- so the connector
+    // has to drop, jog left, then drop again into that box, not just draw
+    // a straight line down (which would dangle on the right with nothing
+    // underneath it).
+    if (i + perRow < nodes.length) {
+      var lastBoxCenterX = (chunk.length - 1) * (boxW + arrowW) + boxW / 2;
+      var firstBoxCenterX = boxW / 2;
+      var connH = 18, midY = connH / 2;
+      out.push({
+        canvas: [
+          { type: 'line', x1: lastBoxCenterX, y1: 0, x2: lastBoxCenterX, y2: midY, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+          { type: 'line', x1: lastBoxCenterX, y1: midY, x2: firstBoxCenterX, y2: midY, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+          { type: 'line', x1: firstBoxCenterX, y1: midY, x2: firstBoxCenterX, y2: connH - 6, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+          { type: 'polyline', lineWidth: 0, color: REPORT_BRAND.accent, closePath: true,
+            points: [{ x: firstBoxCenterX - 4, y: connH - 7 }, { x: firstBoxCenterX + 4, y: connH - 7 }, { x: firstBoxCenterX, y: connH }] }
+        ],
+        margin: [0, 0, 0, 6]
+      });
+    }
+  }
+  return out;
+}
+
+/* Target Start Date order for a module, used to lay out the team
+   accountability flow chart along the same timeline as the Gantt/flow
+   charts above it. */
+function moduleTimelineKey(m) {
+  var d = reportParseDate(m.target_start_date);
+  return d ? d.getTime() : Infinity;
+}
+
+/* module title -> array of team members (from data.team) assigned to it,
+   so the team accountability flow chart can show who owns each module
+   without re-deriving that from the raw task rows. */
+function teamByModuleMap(team) {
+  var map = {};
+  (team || []).forEach(function(t) {
+    (t.modules || []).forEach(function(modTitle) {
+      if (!map[modTitle]) map[modTitle] = [];
+      map[modTitle].push(t);
+    });
+  });
+  return map;
+}
+
+/* Team Accountability as a flow chart for the PDF report -- one card per
+   module (in Target Start Date order), each card a colored header
+   (module name + completion) over a list of the people assigned to it
+   with their own overall avg completion, connected left-to-right by the
+   same drawn arrows as the task/module flow charts above, with the same
+   row-wrap elbow connector when it wraps. modules is already sorted. */
+function pdfTeamFlowChart(modules, teamMap) {
+  var perRow = 3, cardW = 155, arrowW = 20;
+  var out = [];
+  for (var i = 0; i < modules.length; i += perRow) {
+    var chunk = modules.slice(i, i + perRow);
+    var cols = [];
+    chunk.forEach(function(m, idx) {
+      var color = progressColor(m.overall_percent);
+      var people = teamMap[m.title] || [];
+      var personRows = people.length ? people.map(function(p) {
+        var ppct = p.avg_percent != null ? p.avg_percent : 0;
+        return {
+          columns: [
+            { width: 7, margin: [0, 2, 0, 0], canvas: [{ type: 'ellipse', x: 3, y: 3, r1: 3, r2: 3, color: progressColor(ppct) }] },
+            { width: '*', text: [
+              { text: p.name, fontSize: 7.3, bold: true },
+              { text: '  ' + ppct.toFixed(0) + '%', fontSize: 7, color: color }
+            ], margin: [3, 0, 0, 0] }
+          ],
+          margin: [0, 2, 0, 2]
+        };
+      }) : [ { text: 'Unassigned', fontSize: 7, color: REPORT_BRAND.dim, italics: true } ];
+      cols.push({
+        width: cardW,
+        table: {
+          widths: ['*'],
+          body: [
+            [ { text: stripLeadingNumber(m.title) + '\n' + m.overall_percent.toFixed(0) + '% complete', bold: true, color: '#ffffff', fontSize: 8, alignment: 'center', fillColor: color, margin: [4, 4, 4, 4] } ],
+            [ { stack: personRows, fillColor: '#ffffff', margin: [5, 5, 5, 5] } ]
+          ]
+        },
+        layout: {
+          hLineWidth: function() { return 1.25; }, vLineWidth: function() { return 1.25; },
+          hLineColor: function() { return color; }, vLineColor: function() { return color; },
+          paddingLeft: function() { return 0; }, paddingRight: function() { return 0; },
+          paddingTop: function() { return 0; }, paddingBottom: function() { return 0; }
+        }
+      });
+      if (idx < chunk.length - 1) {
+        cols.push({
+          width: arrowW,
+          margin: [0, 24, 0, 0],
+          canvas: [
+            { type: 'line', x1: 0, y1: 4, x2: arrowW - 8, y2: 4, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+            { type: 'polyline', lineWidth: 0, color: REPORT_BRAND.accent, closePath: true,
+              points: [{ x: arrowW - 10, y: 0 }, { x: arrowW - 2, y: 4 }, { x: arrowW - 10, y: 8 }] }
+          ]
+        });
+      }
+    });
+    out.push({ columns: cols, columnGap: 0, margin: [0, 0, 0, 6] });
+    if (i + perRow < modules.length) {
+      var lastCenterX = (chunk.length - 1) * (cardW + arrowW) + cardW / 2;
+      var firstCenterX = cardW / 2;
+      var connH = 18, midY = connH / 2;
+      out.push({
+        canvas: [
+          { type: 'line', x1: lastCenterX, y1: 0, x2: lastCenterX, y2: midY, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+          { type: 'line', x1: lastCenterX, y1: midY, x2: firstCenterX, y2: midY, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+          { type: 'line', x1: firstCenterX, y1: midY, x2: firstCenterX, y2: connH - 6, lineWidth: 1.5, lineColor: REPORT_BRAND.accent },
+          { type: 'polyline', lineWidth: 0, color: REPORT_BRAND.accent, closePath: true,
+            points: [{ x: firstCenterX - 4, y: connH - 7 }, { x: firstCenterX + 4, y: connH - 7 }, { x: firstCenterX, y: connH }] }
+        ],
+        margin: [0, 0, 0, 6]
+      });
+    }
+  }
+  return out;
+}
+
+function loadImageDataUrl(url) {
+  return fetch(url)
+    .then(function(r) { return r.blob(); })
+    .then(function(blob) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onloadend = function() { resolve(reader.result); };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    });
+}
+
+function reportFileName(data) {
+  var parts = [data.client, data.projek_name, 'Status_Report'].filter(Boolean);
+  return parts.join('_').replace(/[^a-z0-9_\-]+/gi, '_') + '.pdf';
+}
+
+/* Full-grid bordered table with a zebra-striped body -- reportProgressCell
+   and the header (.th style) supply their own fill, so this only shades
+   the even body rows, and leaves the header's own navy fill alone. */
+function formalTableLayout() {
+  return {
+    hLineWidth: function() { return 0.75; },
+    vLineWidth: function() { return 0.75; },
+    hLineColor: function() { return '#b9c4d0'; },
+    vLineColor: function() { return '#b9c4d0'; },
+    fillColor: function(rowIndex) { return rowIndex === 0 ? null : (rowIndex % 2 === 0 ? '#f3f6f9' : null); },
+    paddingLeft: function() { return 6; },
+    paddingRight: function() { return 6; },
+    paddingTop: function() { return 5; },
+    paddingBottom: function() { return 5; }
+  };
+}
+
+function buildProjectReportDoc(data, logoDataUrl) {
+  var B = REPORT_BRAND;
+  var content = [];
+
+  content.push({
+    stack: [
+      logoDataUrl ? { image: logoDataUrl, width: 200, alignment: 'center' } : { text: '' },
+      { canvas: [{ type: 'line', x1: 240, y1: 0, x2: 315, y2: 0, lineWidth: 1.5, lineColor: B.accent }], margin: [0, 28, 0, 28] },
+      { text: 'PROJECT STATUS REPORT', style: 'coverKicker', alignment: 'center' },
+      { text: data.projek_name || data.client, style: 'coverTitle', alignment: 'center', margin: [0, 12, 0, 0] },
+      { text: data.client, style: 'coverSubtitle', alignment: 'center', margin: [0, 4, 0, 0] },
+      {
+        margin: [70, 56, 70, 0],
+        table: {
+          widths: ['*', '*', '*'],
+          body: [
+            [{ text: 'PROJEK STATUS', style: 'coverLabel' }, { text: 'TECHNOLOGY', style: 'coverLabel' }, { text: 'CONTRACT PERIOD', style: 'coverLabel' }],
+            [{ text: data.projek_status || '-', style: 'coverValue' }, { text: data.technology || '-', style: 'coverValue' }, { text: (data.contract_start || '-') + ' to ' + (data.contract_end || '-'), style: 'coverValue' }]
+          ]
+        },
+        layout: {
+          hLineWidth: function(i) { return (i === 0 || i === 2) ? 0.75 : 0; },
+          vLineWidth: function() { return 0; },
+          hLineColor: function() { return '#1a1a1a'; },
+          paddingTop: function() { return 6; },
+          paddingBottom: function() { return 12; }
+        }
+      }
+    ],
+    margin: [0, 100, 0, 0]
+  });
+  content.push({ text: '', pageBreak: 'after' });
+
+  content.push({ text: 'Executive Summary', style: 'h1' });
+  content.push({
+    columns: [
+      { width: 150, stack: [
+        { text: data.overall_percent.toFixed(0) + '%', style: 'bigStat', color: progressColor(data.overall_percent) },
+        { text: 'Overall Completion', style: 'bigStatLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: (data.modules || []).length + ' module(s) tracked, ' + (data.tasks || []).length + ' task(s) total.', margin: [0, 4, 0, 4] },
+        { text: 'Contract window: ' + (data.contract_start || 'n/a') + ' to ' + (data.contract_end || 'n/a') + '.', color: B.dim, fontSize: 9.5 }
+      ] }
+    ],
+    margin: [0, 8, 0, 16]
+  });
+
+  content.push({ text: 'Module Completion', style: 'h2' });
+  var moduleRows = [[
+    { text: 'Module', style: 'th' }, { text: 'Category', style: 'th' },
+    { text: 'Tasks', style: 'th' }, { text: 'Progress', style: 'th' }
+  ]];
+  (data.modules || []).forEach(function(m) {
+    moduleRows.push([
+      { text: m.title, bold: true },
+      { text: m.category || '-', color: B.dim, fontSize: 9 },
+      { text: String(m.task_count), alignment: 'center' },
+      reportProgressCell(m.overall_percent)
+    ]);
+  });
+  content.push({
+    table: { headerRows: 1, widths: ['*', 'auto', 40, 160], body: moduleRows },
+    layout: formalTableLayout(), margin: [0, 4, 0, 20]
+  });
+
+  content.push({ text: 'Implementation Timeline', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Actual / Plan / Target dates per module, aggregated across that module\'s tasks.', style: 'note', margin: [0, 0, 0, 8] });
+  var timelineRows = [[
+    { text: 'Module', style: 'th' }, { text: 'Actual Start', style: 'th' }, { text: 'Actual End', style: 'th' },
+    { text: 'Plan Start', style: 'th' }, { text: 'Plan End', style: 'th' },
+    { text: 'Target Start', style: 'th' }, { text: 'Target End', style: 'th' }
+  ]];
+  (data.modules || []).forEach(function(m) {
+    timelineRows.push([
+      { text: m.title, bold: true },
+      m.actual_start_date || '-', m.actual_end_date || '-',
+      m.plan_start_date || '-', m.plan_end_date || '-',
+      m.target_start_date || '-', m.target_end_date || '-'
+    ]);
+  });
+  content.push({
+    table: { headerRows: 1, widths: ['*', 60, 60, 60, 60, 60, 60], body: timelineRows },
+    layout: formalTableLayout(), fontSize: 8.5, margin: [0, 0, 0, 20]
+  });
+
+  content.push({ text: 'Project Gantt Chart', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'One bar per module across the full project span (Target Start to Target End), colored by completion. The dashed red line marks today.', style: 'note', margin: [0, 0, 0, 8] });
+  var ganttSpans = (data.modules || []).map(function(m) {
+    return { label: m.title, start: reportParseDate(m.target_start_date), end: reportParseDate(m.target_end_date), percent: m.overall_percent };
+  }).filter(function(s) { return s.start && s.end; });
+  if (ganttSpans.length) {
+    content.push.apply(content, pdfGanttTable(ganttSpans));
+  } else {
+    content.push({ text: 'No Target Start/End Date data available for this project.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Module Gantt Charts', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Task-level timeline per module (Target Start to Target End).', style: 'note', margin: [0, 0, 0, 8] });
+  (data.modules || []).forEach(function(m, mi) {
+    var taskRows = (data.tasks || []).filter(function(t) { return t.title === m.title; }).map(function(t) {
+      var start = reportParseDate(t.target_start);
+      var end = reportParseDate(t.target_end);
+      if (start && (!end || end.getTime() === start.getTime())) end = new Date(start.getTime() + 86400000);
+      return { label: t.description || '(untitled task)', start: start, end: end, percent: t.percentage != null ? t.percentage : 0 };
+    }).filter(function(r) { return r.start && r.end; });
+    content.push({ text: m.title, style: 'h2', margin: [0, mi === 0 ? 0 : 16, 0, 4] });
+    if (taskRows.length) {
+      content.push.apply(content, pdfGanttTable(taskRows, { showDates: true }));
+    } else {
+      content.push({ text: 'No Target Start/End Date data available for this module\'s tasks.', color: B.dim, margin: [0, 0, 0, 16] });
+    }
+  });
+
+  content.push({ text: 'Module Flow Charts', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Task sequence per module, ordered by Target Start Date, each box colored by completion.', style: 'note', margin: [0, 0, 0, 8] });
+  (data.modules || []).forEach(function(m, mi) {
+    var flowNodes = (data.tasks || []).filter(function(t) { return t.title === m.title; }).slice().sort(function(a, b) { return taskFlowSortKey(a) - taskFlowSortKey(b); })
+      .map(function(t) { return { label: stripLeadingNumber(t.description) || '(untitled task)', percent: t.percentage != null ? t.percentage : 0, start: reportParseDate(t.target_start), end: reportParseDate(t.target_end) }; });
+    content.push({ text: m.title, style: 'h2', margin: [0, mi === 0 ? 0 : 16, 0, 6] });
+    if (flowNodes.length) {
+      content.push.apply(content, pdfFlowChart(flowNodes));
+    } else {
+      content.push({ text: 'No tasks recorded for this module.', color: B.dim, margin: [0, 0, 0, 12] });
+    }
+  });
+
+  content.push({ text: 'Team Accountability', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Module ownership in project sequence (Target Start Date). Each card lists who owns that module and their own overall completion across everything they are assigned to.', style: 'note', margin: [0, 0, 0, 8] });
+  var teamModules = (data.modules || []).slice().sort(function(a, b) { return moduleTimelineKey(a) - moduleTimelineKey(b); });
+  var teamMap = teamByModuleMap(data.team);
+  if (teamModules.length) {
+    content.push.apply(content, pdfTeamFlowChart(teamModules, teamMap));
+  } else {
+    content.push({ text: 'No modules recorded for this project.', color: B.dim, margin: [0, 0, 0, 12] });
+  }
+
+  content.push({ text: 'Team Accountability -- Full List', style: 'h2', pageBreak: 'before', margin: [0, 0, 0, 4] });
+  var teamRows = [[
+    { text: 'Assigned To', style: 'th' }, { text: 'Modules', style: 'th' },
+    { text: 'Tasks', style: 'th' }, { text: 'Avg Progress', style: 'th' }
+  ]];
+  (data.team || []).forEach(function(t) {
+    teamRows.push([
+      { text: t.name, bold: true },
+      { text: (t.modules || []).join(', ') || '-', color: B.dim, fontSize: 9 },
+      { text: String(t.task_count), alignment: 'center' },
+      t.avg_percent != null ? reportProgressCell(t.avg_percent) : { text: '-' }
+    ]);
+  });
+  content.push({
+    table: { headerRows: 1, widths: ['*', '*', 40, 160], body: teamRows },
+    layout: formalTableLayout(), margin: [0, 4, 0, 20]
+  });
+
+  content.push({ text: 'Attention Needed', style: 'h1', pageBreak: 'before' });
+  var att = data.attention || {};
+  if ((att.low_progress_modules || []).length) {
+    content.push({ text: 'Modules Below 50% Complete', style: 'h2' });
+    content.push({ ul: att.low_progress_modules, margin: [0, 0, 0, 12] });
+  }
+  content.push({ text: 'At-Risk Modules (' + (att.at_risk_modules || []).length + ')', style: 'h2' });
+  content.push({ text: 'A module is flagged at risk when it is both less than 50% complete and already has at least one overdue task. It is behind schedule with little buffer left to recover, which sets it apart from a module that is merely slow but still on track.', style: 'note', margin: [0, 0, 0, 6] });
+  if ((att.at_risk_modules || []).length) {
+    content.push({ ul: att.at_risk_modules.map(function(t) { return { text: t, bold: true, color: B.danger }; }), margin: [0, 0, 0, 12] });
+  } else {
+    content.push({ text: 'None -- no module is both below 50% complete and overdue.', color: B.success, margin: [0, 0, 0, 12] });
+  }
+  content.push({ text: 'Schedule Slippage (' + (att.slippage || []).length + ')', style: 'h2' });
+  content.push({ text: 'Slippage is the number of days a task\'s Target End Date has moved past its original Plan End Date. A positive number means the committed schedule has already drifted from the original plan, even if the task is not overdue yet.', style: 'note', margin: [0, 0, 0, 6] });
+  if ((att.slippage || []).length) {
+    var slippageRows = [[
+      { text: 'Module', style: 'th' }, { text: 'Task', style: 'th' },
+      { text: 'Plan End', style: 'th' }, { text: 'Target End', style: 'th' },
+      { text: 'Slippage', style: 'th' }, { text: 'Assigned To', style: 'th' }
+    ]];
+    att.slippage.forEach(function(s) {
+      slippageRows.push([
+        s.title, s.description || '-', s.plan_end || '-', s.target_end || '-',
+        { text: '+' + s.slippage_days + 'd', bold: true, color: s.slippage_days > 14 ? B.danger : B.warning },
+        s.assigned_to || '-'
+      ]);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 50, 50, 45, '*'], body: slippageRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 16] });
+  } else {
+    content.push({ text: 'None -- no task\'s Target End Date has slipped past its Plan End Date.', color: B.success, margin: [0, 0, 0, 16] });
+  }
+  content.push({ text: 'Overdue Tasks (' + (att.overdue || []).length + ')', style: 'h2' });
+  if ((att.overdue || []).length) {
+    var overdueRows = [[
+      { text: 'Module', style: 'th' }, { text: 'Task', style: 'th' },
+      { text: 'Plan End', style: 'th' }, { text: 'Target End', style: 'th' }, { text: 'Assigned To', style: 'th' }
+    ]];
+    att.overdue.forEach(function(o) {
+      overdueRows.push([
+        o.title, o.description || '-',
+        { text: o.plan_end || '-', color: reportDatePassed(o.plan_end) ? B.danger : undefined, bold: reportDatePassed(o.plan_end) },
+        { text: o.target_end || '-', color: reportDatePassed(o.target_end) ? B.danger : undefined, bold: reportDatePassed(o.target_end) },
+        o.assigned_to || '-'
+      ]);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 55, '*'], body: overdueRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 16] });
+  } else {
+    content.push({ text: 'None -- no incomplete tasks past their Plan End or Target End Date.', color: B.success, margin: [0, 0, 0, 16] });
+  }
+  content.push({ text: 'Upcoming Deadlines, Next 14 Days (' + (att.upcoming || []).length + ')', style: 'h2' });
+  if ((att.upcoming || []).length) {
+    var upcomingRows = [[
+      { text: 'Module', style: 'th' }, { text: 'Task', style: 'th' },
+      { text: 'Plan End', style: 'th' }, { text: 'Target End', style: 'th' }, { text: 'Assigned To', style: 'th' }
+    ]];
+    att.upcoming.forEach(function(o) {
+      upcomingRows.push([o.title, o.description || '-', o.plan_end || '-', o.target_end || '-', o.assigned_to || '-']);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 55, '*'], body: upcomingRows }, layout: formalTableLayout(), fontSize: 9 });
+  } else {
+    content.push({ text: 'None scheduled in the next 14 days.', color: B.dim });
+  }
+
+  return {
+    pageMargins: [40, 90, 40, 50],
+    background: function(currentPage, pageSize) {
+      var w = pageSize.width, h = pageSize.height;
+      // Cover page: full-bleed top accent bar + bottom band, so the
+      // design uses the whole page instead of a block of centered text
+      // floating in the middle of empty white space.
+      if (currentPage === 1) {
+        var bandH = 86;
+        return {
+          stack: [
+            { canvas: [
+              { type: 'rect', x: 0, y: 0, w: w, h: 5, color: B.accent },
+              { type: 'rect', x: 0, y: h - bandH, w: w, h: bandH, color: '#1a1a1a' }
+            ] },
+            {
+              absolutePosition: { x: 0, y: h - bandH + 22 },
+              columns: [{ width: w, stack: [
+                { text: 'CONFIDENTIAL', color: '#ffffff', bold: true, fontSize: 11, alignment: 'center', characterSpacing: 2 },
+                { text: 'For Internal & Client Distribution Only', color: '#9aa4b0', fontSize: 8.5, alignment: 'center', margin: [0, 4, 0, 0] }
+              ] }]
+            }
+          ]
+        };
+      }
+      // Every other page: the same logo, faint, centered -- matching the
+      // dashboard's own watermark treatment (body::before, low opacity).
+      // The logo crop is wide (~2.27:1), so fit it into a box and center
+      // using its actual scaled height rather than the box's own size,
+      // otherwise it renders pinned to the top of the box instead of
+      // vertically centered on the page.
+      if (!logoDataUrl) return null;
+      var boxSize = Math.min(w, h) * 0.55;
+      var logoAspect = 250 / 110;
+      var logoW = boxSize, logoH = boxSize / logoAspect;
+      return {
+        image: logoDataUrl, fit: [boxSize, boxSize], opacity: 0.05,
+        absolutePosition: { x: (w - logoW) / 2, y: (h - logoH) / 2 }
+      };
+    },
+    header: function(currentPage) {
+      if (currentPage === 1) return null;
+      return {
+        margin: [40, 20, 40, 0],
+        columns: [
+          logoDataUrl ? { image: logoDataUrl, width: 45 } : { text: '' },
+          { text: B.name, margin: [8, 2, 0, 0], fontSize: 9, bold: true, color: B.navy },
+          { text: 'Project Status Report', alignment: 'right', fontSize: 9, color: B.dim }
+        ]
+      };
+    },
+    footer: function(currentPage, pageCount) {
+      if (currentPage === 1) return null;
+      return { text: currentPage + ' / ' + pageCount, alignment: 'center', fontSize: 8, color: B.dim, margin: [0, 10, 0, 0] };
+    },
+    content: content,
+    defaultStyle: { fontSize: 10, color: '#1a1a1a' },
+    styles: {
+      coverKicker: { fontSize: 10.5, bold: true, color: '#5a6b7a', characterSpacing: 2 },
+      coverTitle: { fontSize: 27, bold: true, color: '#1a1a1a' },
+      coverSubtitle: { fontSize: 14, color: B.accent },
+      coverLabel: { fontSize: 8, bold: true, color: '#5a6b7a', characterSpacing: 0.5, alignment: 'center' },
+      coverValue: { fontSize: 11, bold: true, color: '#1a1a1a', margin: [0, 3, 0, 0], alignment: 'center' },
+      h1: { fontSize: 16, bold: true, color: '#1a1a1a', margin: [0, 0, 0, 8] },
+      h2: { fontSize: 12, bold: true, color: B.accent, margin: [0, 4, 0, 6] },
+      th: { bold: true, fontSize: 9, color: '#fff', fillColor: '#1a1a1a' },
+      note: { fontSize: 9, italics: true, color: B.dim },
+      bigStat: { fontSize: 34, bold: true },
+      bigStatLabel: { fontSize: 9, color: B.dim, bold: true }
+    }
+  };
+}
+
+/* Swaps a button's own label for a spinner + status text while a report
+   generates, and restores it afterward -- fetch + doc-building can take
+   a couple of seconds for a large project, so without this the button
+   just sits there looking unresponsive. */
+function setButtonLoading(btn, loadingText) {
+  if (!btn) return null;
+  var original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span> ' + loadingText;
+  return original;
+}
+function restoreButton(btn, original) {
+  if (!btn || original == null) return;
+  btn.disabled = false;
+  btn.innerHTML = original;
+}
+
+function downloadProjectReport(btn) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  var projekName = params.get('projek_name');
+  if (!client) {
+    alert('Select a single client first to generate a project report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PDF...');
+  var url = '/api/project_report_data?client=' + encodeURIComponent(client);
+  if (projekName) url += '&projek_name=' + encodeURIComponent(projekName);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var doc = buildProjectReportDoc(res.data, logoDataUrl);
+      pdfMake.createPdf(doc).download(reportFileName(res.data));
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
+
+/* ---------- Project PPTX report (client-side, PptxGenJS) ----------
+   Same data source as the PDF report (/api/project_report_data), same
+   "derive everything, no hand-written narrative" rule, styled like the
+   card/ring/timeline layout of the reference deck. Generated entirely in
+   the browser via PptxGenJS (CDN, see <head>) -- no server dependency. */
+var PPTX_HEX = { navy: '1A1A1A', accent: '2C5F82', teal: '4FA3B8', success: '0E9F6E', warning: 'C2760C', danger: 'DC2626', dim: '5A6579', border: 'B9C4D0', panel: 'F3F6F9', track: 'E2E8F0' };
+
+function pptxProgressColor(pct) {
+  if (pct >= 100) return PPTX_HEX.success;
+  if (pct >= 50) return PPTX_HEX.accent;
+  return PPTX_HEX.warning;
+}
+
+function pptxProgressTint(pct) {
+  if (pct >= 100) return 'E3F7EF';
+  if (pct >= 50) return 'E7EEF4';
+  return 'FBF1E3';
+}
+
+function pptxParseDate(ddmmyyyy) {
+  return reportParseDate(ddmmyyyy);
+}
+
+/* Shared Gantt-bar slide builder for the PPTX report -- rows is an array
+   of {label, start, end, percent} (Date objects already resolved by the
+   caller). Paginates onto multiple slides (maxPerSlide rows each) so a
+   module with many tasks doesn't overflow one slide. Used for both the
+   project-wide chart (one row per module) and the per-module charts (one
+   row per task). Pass showDates=true to print each row's own Target
+   Start -> Target End date range under its label -- used for the
+   task-level Module Gantt Charts. */
+function pptxGanttSection(pptx, header, W, H_, mainTitle, subtitle, rows, emptyMsg, maxPerSlide, showDates) {
+  maxPerSlide = maxPerSlide || 8;
+  if (!rows.length) {
+    var empty = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(empty, mainTitle);
+    empty.addText(mainTitle, { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    empty.addText(emptyMsg, { x: 0.5, y: 1.6, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+    return;
+  }
+  var minDate = new Date(Math.min.apply(null, rows.map(function(r) { return r.start.getTime(); })));
+  var maxDate = new Date(Math.max.apply(null, rows.map(function(r) { return r.end.getTime(); })));
+  var totalMs = Math.max(maxDate.getTime() - minDate.getTime(), 86400000);
+  var trackX = 3.3, trackW = W - trackX - 0.5;
+  var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  for (var offset = 0; offset < rows.length; offset += maxPerSlide) {
+    var chunk = rows.slice(offset, offset + maxPerSlide);
+    var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(slide, mainTitle);
+    var pageSuffix = rows.length > maxPerSlide ? ' (' + (offset / maxPerSlide + 1) + '/' + Math.ceil(rows.length / maxPerSlide) + ')' : '';
+    slide.addText(mainTitle + pageSuffix, { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    slide.addText(subtitle, { x: 0.5, y: 1.15, w: 10, h: 0.3, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+    var rowY = 1.7, rowH = 0.62;
+    var monthCursor = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    while (monthCursor <= maxDate) {
+      var frac = (monthCursor.getTime() - minDate.getTime()) / totalMs;
+      var mx = trackX + trackW * Math.max(0, Math.min(1, frac));
+      slide.addShape('line', { x: mx, y: rowY - 0.05, w: 0, h: chunk.length * rowH + 0.1, line: { color: H_.border, width: 0.5, dashType: 'dash' } });
+      slide.addText(monthNames[monthCursor.getMonth()] + ' \'' + String(monthCursor.getFullYear()).slice(2), { x: mx - 0.4, y: rowY - 0.32, w: 0.8, h: 0.24, align: 'center', fontSize: 8, color: H_.dim, fontFace: 'Arial' });
+      monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1);
+    }
+    var today = new Date();
+    if (today >= minDate && today <= maxDate) {
+      var tfrac = (today.getTime() - minDate.getTime()) / totalMs;
+      var tx = trackX + trackW * tfrac;
+      slide.addShape('line', { x: tx, y: rowY - 0.05, w: 0, h: chunk.length * rowH + 0.1, line: { color: H_.danger, width: 1, dashType: 'dash' } });
+    }
+    chunk.forEach(function(r, i) {
+      var y = rowY + i * rowH;
+      if (showDates) {
+        slide.addText(r.label, { x: 0.5, y: y, w: trackX - 0.6, h: 0.32, valign: 'bottom', bold: true, fontSize: 10, color: H_.navy, fontFace: 'Arial' });
+        var dateStr = r.start.toLocaleDateString('en-GB') + ' - ' + r.end.toLocaleDateString('en-GB');
+        slide.addText(dateStr, { x: 0.5, y: y + 0.32, w: trackX - 0.6, h: 0.22, valign: 'top', italic: true, fontSize: 7.5, color: H_.dim, fontFace: 'Arial' });
+      } else {
+        slide.addText(r.label, { x: 0.5, y: y, w: trackX - 0.6, h: rowH - 0.1, valign: 'middle', bold: true, fontSize: 10.5, color: H_.navy, fontFace: 'Arial' });
+      }
+      slide.addShape('roundRect', { x: trackX, y: y + (rowH - 0.28) / 2, w: trackW, h: 0.28, rectRadius: 0.05, fill: { color: H_.panel }, line: { type: 'none' } });
+      var sf = Math.max(0, Math.min(1, (r.start.getTime() - minDate.getTime()) / totalMs));
+      var ef = Math.max(0, Math.min(1, (r.end.getTime() - minDate.getTime()) / totalMs));
+      var barX = trackX + trackW * sf;
+      var barW = Math.max(trackW * (ef - sf), 0.12);
+      slide.addShape('roundRect', { x: barX, y: y + (rowH - 0.28) / 2, w: barW, h: 0.28, rectRadius: 0.05, fill: { color: pptxProgressColor(r.percent) }, line: { type: 'none' } });
+    });
+  }
+}
+
+/* Small box-by-box flow diagram slide(s) for the PPTX report -- one small
+   box per node (a task or a module, whichever the caller passes) in a
+   grid (perRow across, rowsPerSlide down), connected left-to-right by a
+   drawn connector line with an arrowhead (not a font glyph). When a row
+   wraps, a short down-then-right connector from the last box of that row
+   into the first box of the next row keeps the whole grid reading as one
+   continuous flow rather than several disconnected strips. Paginates onto
+   extra slides rather than shrinking below a readable size. nodes is
+   [{label, percent, start, end}] (start/end are optional Date objects),
+   already in display order. */
+function pptxFlowChartSlide(pptx, header, W, H_, mainTitle, subtitle, nodes, emptyMsg) {
+  var perRow = 5, boxW = 1.85, boxH = 0.8, gapX = 0.4, rowGap = 0.45, rowsPerSlide = 4;
+  var perSlide = perRow * rowsPerSlide;
+  if (!nodes.length) {
+    var empty = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(empty, mainTitle);
+    empty.addText(mainTitle, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    empty.addText(emptyMsg, { x: 0.5, y: 1.6, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+    return;
+  }
+  for (var offset = 0; offset < nodes.length; offset += perSlide) {
+    var chunk = nodes.slice(offset, offset + perSlide);
+    var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(slide, mainTitle);
+    var pageSuffix = nodes.length > perSlide ? ' (' + (offset / perSlide + 1) + '/' + Math.ceil(nodes.length / perSlide) + ')' : '';
+    slide.addText(mainTitle + pageSuffix, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    slide.addText(subtitle, { x: 0.5, y: 1.15, w: 10, h: 0.3, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+    var startX = 0.5, startY = 1.65;
+    chunk.forEach(function(n, i) {
+      var col = i % perRow, row = Math.floor(i / perRow);
+      var x = startX + col * (boxW + gapX);
+      var y = startY + row * (boxH + rowGap);
+      var pct = n.percent != null ? n.percent : 0;
+      var color = pptxProgressColor(pct);
+      var label = (offset + i + 1) + '. ' + (n.label || '(untitled)');
+      var dateStr = (n.start && n.end) ? (n.start.toLocaleDateString('en-GB') + ' - ' + n.end.toLocaleDateString('en-GB')) : '';
+      slide.addShape('roundRect', { x: x, y: y, w: boxW, h: boxH, rectRadius: 0.06, fill: { color: pptxProgressTint(pct) }, line: { color: color, width: 1.25 }, shadow: { type: 'outer', color: '000000', opacity: 0.12, blur: 3, offset: 1, angle: 90 } });
+      slide.addShape('rect', { x: x, y: y, w: 0.07, h: boxH, fill: { color: color }, line: { type: 'none' } });
+      slide.addText(label, { x: x + 0.16, y: y + 0.04, w: boxW - 0.24, h: boxH - 0.44, fontSize: 7.5, color: H_.navy, fontFace: 'Arial', valign: 'top', shrinkText: true });
+      if (dateStr) {
+        slide.addText(dateStr, { x: x + 0.16, y: y + boxH - 0.42, w: boxW - 0.24, h: 0.18, fontSize: 6.5, italic: true, color: H_.dim, fontFace: 'Arial', valign: 'top' });
+      }
+      slide.addText(pct.toFixed(0) + '%', { x: x + 0.16, y: y + boxH - 0.24, w: boxW - 0.24, h: 0.2, fontSize: 7.5, bold: true, color: color, fontFace: 'Arial', align: 'right' });
+      if (col < perRow - 1 && i < chunk.length - 1) {
+        slide.addShape('line', { x: x + boxW, y: y + boxH / 2, w: gapX, h: 0, line: { color: H_.accent, width: 1.5, endArrowType: 'triangle' } });
+      } else if (col === perRow - 1 && i < chunk.length - 1) {
+        // Last box of a wrapped row -- drop straight down, then hand off
+        // to the first box of the next row with a short right-pointing
+        // arrow, so the reading order stays unambiguous.
+        var midY = y + boxH + rowGap / 2;
+        slide.addShape('line', { x: x + boxW / 2, y: y + boxH, w: 0, h: rowGap / 2, line: { color: H_.accent, width: 1.5 } });
+        slide.addShape('line', { x: startX, y: midY, w: x + boxW / 2 - startX, h: 0, line: { color: H_.accent, width: 1.5 } });
+        slide.addShape('line', { x: startX, y: midY, w: 0, h: rowGap / 2, line: { color: H_.accent, width: 1.5, endArrowType: 'triangle' } });
+      }
+    });
+  }
+}
+
+/* Team Accountability as a flow chart slide(s) for the PPTX report --
+   one card per module (in Target Start Date order), each card a colored
+   header (module name + completion) over a list of the people assigned
+   to it with their own overall avg completion, connected left-to-right
+   by a drawn arrow, with the same row-wrap elbow connector used by
+   pptxFlowChartSlide when a row wraps. modules is already sorted. */
+function pptxTeamFlowChartSlide(pptx, header, W, H_, mainTitle, modules, teamMap) {
+  var perRow = 3, cardW = 3.6, headerH = 0.5, gapX = 0.5, rowGap = 0.5, rowsPerSlide = 2;
+  var perSlide = perRow * rowsPerSlide;
+  if (!modules.length) {
+    var empty = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(empty, mainTitle);
+    empty.addText(mainTitle, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    empty.addText('No modules recorded for this project.', { x: 0.5, y: 1.6, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+    return;
+  }
+  for (var offset = 0; offset < modules.length; offset += perSlide) {
+    var chunk = modules.slice(offset, offset + perSlide);
+    var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(slide, mainTitle);
+    var pageSuffix = modules.length > perSlide ? ' (' + (offset / perSlide + 1) + '/' + Math.ceil(modules.length / perSlide) + ')' : '';
+    slide.addText(mainTitle + pageSuffix, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    slide.addText('Module ownership in project sequence (Target Start Date). Each card lists who owns that module and their own overall completion.', { x: 0.5, y: 1.15, w: 10, h: 0.3, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+    var startX = 0.5, startY = 1.65;
+    chunk.forEach(function(m, i) {
+      var col = i % perRow, row = Math.floor(i / perRow);
+      var x = startX + col * (cardW + gapX);
+      var y = startY + row * (2.4 + rowGap);
+      var color = pptxProgressColor(m.overall_percent);
+      var people = teamMap[m.title] || [];
+      slide.addShape('roundRect', { x: x, y: y, w: cardW, h: 2.4, rectRadius: 0.06, fill: { color: 'FFFFFF' }, line: { color: color, width: 1.25 }, shadow: { type: 'outer', color: '000000', opacity: 0.12, blur: 3, offset: 1, angle: 90 } });
+      slide.addShape('roundRect', { x: x, y: y, w: cardW, h: headerH, rectRadius: 0.06, fill: { color: color }, line: { type: 'none' } });
+      slide.addText(stripLeadingNumber(m.title) + ' (' + m.overall_percent.toFixed(0) + '%)', { x: x + 0.1, y: y, w: cardW - 0.2, h: headerH, valign: 'middle', align: 'center', bold: true, fontSize: 10.5, color: 'FFFFFF', fontFace: 'Arial', shrinkText: true });
+      if (people.length) {
+        var runs = [];
+        people.forEach(function(p) {
+          var ppct = p.avg_percent != null ? p.avg_percent : 0;
+          runs.push({ text: p.name, options: { bold: true } });
+          runs.push({ text: '  ' + ppct.toFixed(0) + '%', options: { color: pptxProgressColor(ppct), breakLine: true } });
+        });
+        slide.addText(runs, { x: x + 0.15, y: y + headerH + 0.08, w: cardW - 0.3, h: 2.4 - headerH - 0.16, fontSize: 9, color: H_.navy, fontFace: 'Arial', valign: 'top', lineSpacingMultiple: 1.35, shrinkText: true });
+      } else {
+        slide.addText('Unassigned', { x: x + 0.15, y: y + headerH + 0.08, w: cardW - 0.3, h: 0.3, fontSize: 9, italic: true, color: H_.dim, fontFace: 'Arial' });
+      }
+      if (col < perRow - 1 && i < chunk.length - 1) {
+        slide.addShape('line', { x: x + cardW, y: y + 1.2, w: gapX, h: 0, line: { color: H_.accent, width: 1.5, endArrowType: 'triangle' } });
+      } else if (col === perRow - 1 && i < chunk.length - 1) {
+        var midY = y + 2.4 + rowGap / 2;
+        slide.addShape('line', { x: x + cardW / 2, y: y + 2.4, w: 0, h: rowGap / 2, line: { color: H_.accent, width: 1.5 } });
+        slide.addShape('line', { x: startX, y: midY, w: x + cardW / 2 - startX, h: 0, line: { color: H_.accent, width: 1.5 } });
+        slide.addShape('line', { x: startX, y: midY, w: 0, h: rowGap / 2, line: { color: H_.accent, width: 1.5, endArrowType: 'triangle' } });
+      }
+    });
+  }
+}
+
+function pptxRingSlide(slide, x, y, w, h, pct, title, subtitle) {
+  var d = Math.min(w, h);
+  var ringSize = d * 0.62;
+  var ringX = x + (w - ringSize) / 2;
+  var ringY = y + h * 0.16;
+  var color = pptxProgressColor(pct);
+  slide.addChart('doughnut', [{ name: 'Progress', labels: ['Done', 'Remaining'], values: [pct, Math.max(0, 100 - pct)] }], {
+    x: ringX, y: ringY, w: ringSize, h: ringSize,
+    chartColors: [color, PPTX_HEX.track], holeSize: 72,
+    showLegend: false, showTitle: false, showValue: false, showLabel: false, dataBorder: { pt: 0, color: 'FFFFFF' }
+  });
+  slide.addText(pct.toFixed(0) + '%', { x: ringX, y: ringY + ringSize / 2 - 0.28, w: ringSize, h: 0.5, align: 'center', valign: 'middle', bold: true, fontSize: Math.max(14, ringSize * 13), color: color, fontFace: 'Arial' });
+  slide.addText(title, { x: x, y: ringY + ringSize + 0.06, w: w, h: 0.3, align: 'center', bold: true, fontSize: 11, color: PPTX_HEX.navy, fontFace: 'Arial' });
+  if (subtitle) {
+    slide.addText(subtitle, { x: x, y: ringY + ringSize + 0.34, w: w, h: 0.5, align: 'center', fontSize: 8.5, color: PPTX_HEX.dim, fontFace: 'Arial', valign: 'top' });
+  }
+}
+
+function buildProjectReportPptx(data, logoDataUrl) {
+  var pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  var W = 13.33, H = 7.5;
+  var H_ = PPTX_HEX;
+  pptx.defineSlideMaster({ title: 'SW_BASE', background: { color: 'FFFFFF' } });
+
+  function header(slide, pageLabel) {
+    slide.addShape('rect', { x: 0, y: 0, w: W, h: 0.5, fill: { color: 'FFFFFF' }, line: { type: 'none' } });
+    if (logoDataUrl) slide.addImage({ data: logoDataUrl, x: 0.4, y: 0.12, w: 0.7, h: 0.7 * 110 / 250 });
+    slide.addText(REPORT_BRAND.name, { x: 1.2, y: 0.12, w: 5, h: 0.3, fontSize: 9, bold: true, color: H_.navy, fontFace: 'Arial' });
+    slide.addText(pageLabel || 'Project Status Report', { x: W - 5.4, y: 0.12, w: 5, h: 0.3, align: 'right', fontSize: 9, color: H_.dim, fontFace: 'Arial' });
+    slide.addShape('rect', { x: 0, y: 0.5, w: W, h: 0.015, fill: { color: H_.border }, line: { type: 'none' } });
+  }
+
+  // ---- Slide 1: Cover ----
+  var cover = pptx.addSlide({ masterName: 'SW_BASE' });
+  cover.addShape('rect', { x: 0, y: 0, w: W, h: 0.06, fill: { color: H_.accent }, line: { type: 'none' } });
+  var bandH = 0.85;
+  cover.addShape('rect', { x: 0, y: H - bandH, w: W, h: bandH, fill: { color: H_.navy }, line: { type: 'none' } });
+  cover.addText('CONFIDENTIAL', { x: 0, y: H - bandH + 0.2, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: 'FFFFFF', charSpacing: 3, fontFace: 'Arial' });
+  cover.addText('For Internal & Client Distribution Only', { x: 0, y: H - bandH + 0.5, w: W, h: 0.25, align: 'center', fontSize: 9, color: 'AEB9C4', fontFace: 'Arial' });
+  if (logoDataUrl) {
+    var logoW = 3.4, logoH = logoW * 110 / 250;
+    cover.addImage({ data: logoDataUrl, x: (W - logoW) / 2, y: 0.75, w: logoW, h: logoH });
+  }
+  cover.addShape('rect', { x: W / 2 - 0.5, y: 2.55, w: 1.0, h: 0.018, fill: { color: H_.accent }, line: { type: 'none' } });
+  cover.addText('PROJECT STATUS REPORT', { x: 0, y: 2.75, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: H_.dim, charSpacing: 2.5, fontFace: 'Arial' });
+  cover.addText(data.projek_name || data.client, { x: 0.5, y: 3.1, w: W - 1, h: 0.6, align: 'center', bold: true, fontSize: 30, color: H_.navy, fontFace: 'Arial' });
+  cover.addText(data.client, { x: 0, y: 3.72, w: W, h: 0.4, align: 'center', fontSize: 16, color: H_.accent, fontFace: 'Arial' });
+  var factY = 4.5;
+  cover.addShape('rect', { x: 2.0, y: factY, w: W - 4.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+  var facts = [
+    ['PROJEK STATUS', data.projek_status || '-'],
+    ['TECHNOLOGY', data.technology || '-'],
+    ['CONTRACT PERIOD', (data.contract_start || '-') + ' to ' + (data.contract_end || '-')]
+  ];
+  var factW = (W - 4.0) / 3;
+  facts.forEach(function(f, i) {
+    var fx = 2.0 + i * factW;
+    cover.addText(f[0], { x: fx, y: factY + 0.12, w: factW, h: 0.25, align: 'center', bold: true, fontSize: 8, color: H_.dim, charSpacing: 0.5, fontFace: 'Arial' });
+    cover.addText(f[1], { x: fx, y: factY + 0.38, w: factW, h: 0.35, align: 'center', bold: true, fontSize: 11, color: H_.navy, fontFace: 'Arial' });
+  });
+  cover.addShape('rect', { x: 2.0, y: factY + 0.85, w: W - 4.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+
+  // ---- Slide 2: Executive Summary ----
+  var exec = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(exec);
+  exec.addText('Executive Summary', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var modules = data.modules || [];
+  pptxRingSlide(exec, 0.4, 1.25, 3.0, 2.6, data.overall_percent, 'Overall Completion', modules.length + ' module(s), ' + (data.tasks || []).length + ' task(s)');
+  exec.addText('Contract window: ' + (data.contract_start || 'n/a') + ' to ' + (data.contract_end || 'n/a') + '.', { x: 3.6, y: 1.9, w: 9.2, h: 0.3, fontSize: 10.5, color: H_.dim, fontFace: 'Arial' });
+
+  var shown = modules.slice(0, 4);
+  var cardW = 2.9, cardGap = 0.18, cardsY = 4.15, cardH = 2.9;
+  var totalW = shown.length * cardW + (shown.length - 1) * cardGap;
+  var startX = (W - totalW) / 2;
+  shown.forEach(function(m, i) {
+    var cx = startX + i * (cardW + cardGap);
+    exec.addShape('roundRect', { x: cx, y: cardsY, w: cardW, h: cardH, rectRadius: 0.08, fill: { color: 'FFFFFF' }, line: { color: H_.border, width: 0.75 } });
+    pptxRingSlide(exec, cx, cardsY, cardW, cardH, m.overall_percent, m.title, (m.category || '') + '\n' + m.task_count + ' task(s)');
+  });
+  if (modules.length > 4) {
+    exec.addText('+ ' + (modules.length - 4) + ' more module(s) -- see Module Completion table.', { x: 0, y: cardsY + cardH + 0.12, w: W, h: 0.3, align: 'center', italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide 3: Module Completion table ----
+  var modSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(modSlide);
+  modSlide.addText('Module Completion', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var modRows = [[
+    { text: 'Module', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } },
+    { text: 'Category', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } },
+    { text: 'Tasks', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } },
+    { text: 'Progress', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }
+  ]];
+  modules.forEach(function(m, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    modRows.push([
+      { text: m.title, options: { bold: true, fill: { color: zebra } } },
+      { text: m.category || '-', options: { color: H_.dim, fontSize: 9, fill: { color: zebra } } },
+      { text: String(m.task_count), options: { align: 'center', fill: { color: zebra } } },
+      { text: m.overall_percent.toFixed(0) + '%', options: { align: 'center', bold: true, color: pptxProgressColor(m.overall_percent), fill: { color: zebra } } }
+    ]);
+  });
+  modSlide.addTable(modRows, { x: 0.5, y: 1.3, w: W - 1, colW: [(W - 1) * 0.42, (W - 1) * 0.28, (W - 1) * 0.12, (W - 1) * 0.18], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 }, autoPage: true, autoPageLineWeight: 0 });
+
+  // ---- Slide 4: Project Gantt Chart (one row per module) ----
+  var projectGanttRows = modules.map(function(m) {
+    return { label: m.title, start: pptxParseDate(m.target_start_date), end: pptxParseDate(m.target_end_date), percent: m.overall_percent };
+  }).filter(function(r) { return r.start && r.end; });
+  pptxGanttSection(pptx, header, W, H_, 'Project Gantt Chart', 'Target Start/End Date per module, aggregated across that module\'s tasks. Dashed line marks today.', projectGanttRows, 'No Target Start/End Date data available for this project.');
+
+  // ---- Slide(s): Module Gantt Charts (one row per task, per module) ----
+  modules.forEach(function(m) {
+    var taskRows = (data.tasks || []).filter(function(t) { return t.title === m.title; }).map(function(t) {
+      var start = pptxParseDate(t.target_start), end = pptxParseDate(t.target_end);
+      if (start && (!end || end.getTime() === start.getTime())) end = new Date(start.getTime() + 86400000);
+      return { label: t.description || '(untitled task)', start: start, end: end, percent: t.percentage != null ? t.percentage : 0 };
+    }).filter(function(r) { return r.start && r.end; });
+    pptxGanttSection(pptx, header, W, H_, 'Module Gantt Chart -- ' + m.title, 'Task-level Target Start/End Date. Dashed line marks today.', taskRows, 'No Target Start/End Date data available for this module\'s tasks.', undefined, true);
+  });
+
+  // ---- Slide(s): Module Flow Charts (box-by-box task sequence, per module) ----
+  modules.forEach(function(m) {
+    var flowNodes = (data.tasks || []).filter(function(t) { return t.title === m.title; }).slice().sort(function(a, b) { return taskFlowSortKey(a) - taskFlowSortKey(b); })
+      .map(function(t) { return { label: stripLeadingNumber(t.description) || '(untitled task)', percent: t.percentage != null ? t.percentage : 0, start: pptxParseDate(t.target_start), end: pptxParseDate(t.target_end) }; });
+    pptxFlowChartSlide(pptx, header, W, H_, 'Module Flow Chart -- ' + m.title, 'Task sequence ordered by Target Start Date, each box colored by completion.', flowNodes, 'No tasks recorded for this module.');
+  });
+
+  // ---- Slide(s): Team Accountability (flow chart of module ownership) ----
+  var teamModules = modules.slice().sort(function(a, b) { return moduleTimelineKey(a) - moduleTimelineKey(b); });
+  var teamMap = teamByModuleMap(data.team);
+  pptxTeamFlowChartSlide(pptx, header, W, H_, 'Team Accountability', teamModules, teamMap);
+
+  // ---- Slide: Team Accountability -- Full List ----
+  var team = data.team || [];
+  var teamListSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(teamListSlide, 'Team Accountability');
+  teamListSlide.addText('Team Accountability -- Full List', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  if (!team.length) {
+    teamListSlide.addText('No Assigned To data available.', { x: 0.5, y: 1.4, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  } else {
+    var teamListRows = [[
+      { text: 'Assigned To', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } },
+      { text: 'Modules', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } },
+      { text: 'Tasks', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } },
+      { text: 'Avg Progress', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }
+    ]];
+    team.forEach(function(t, i) {
+      var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+      teamListRows.push([
+        { text: t.name, options: { bold: true, fill: { color: zebra } } },
+        { text: (t.modules || []).join(', ') || '-', options: { color: H_.dim, fontSize: 9, fill: { color: zebra } } },
+        { text: String(t.task_count), options: { align: 'center', fill: { color: zebra } } },
+        { text: t.avg_percent != null ? t.avg_percent.toFixed(0) + '%' : '-', options: { align: 'center', bold: true, color: t.avg_percent != null ? pptxProgressColor(t.avg_percent) : H_.dim, fill: { color: zebra } } }
+      ]);
+    });
+    teamListSlide.addTable(teamListRows, { x: 0.5, y: 1.3, w: W - 1, colW: [(W - 1) * 0.24, (W - 1) * 0.42, (W - 1) * 0.14, (W - 1) * 0.20], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 }, autoPage: true, autoPageLineWeight: 0 });
+  }
+
+  // ---- Slide: Attention Needed (overview) ----
+  var att = data.attention || {};
+  var overdue = att.overdue || [], upcoming = att.upcoming || [], lowMods = att.low_progress_modules || [];
+  var atSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(atSlide);
+  atSlide.addText('Attention Needed', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var atRiskMods = att.at_risk_modules || [], slippage = att.slippage || [];
+  var summarySentence = lowMods.length
+    ? lowMods.length + ' module(s) below 50% complete (' + lowMods.join(', ') + '). '
+    : 'All modules are at or above 50% complete. ';
+  summarySentence += overdue.length + ' task(s) overdue, ' + upcoming.length + ' due within 14 days, ' + atRiskMods.length + ' module(s) at risk, ' + slippage.length + ' task(s) with schedule slippage.';
+  atSlide.addShape('rect', { x: 0.5, y: 1.35, w: W - 1, h: 0.75, fill: { color: H_.navy }, line: { type: 'none' } });
+  atSlide.addText(summarySentence, { x: 0.7, y: 1.35, w: W - 1.4, h: 0.75, valign: 'middle', fontSize: 12, color: 'FFFFFF', fontFace: 'Arial' });
+  if (lowMods.length) {
+    atSlide.addText('Modules Below 50% Complete', { x: 0.5, y: 2.4, w: 8, h: 0.35, bold: true, fontSize: 13, color: H_.accent, fontFace: 'Arial' });
+    atSlide.addText(lowMods.map(function(m) { return '• ' + m; }).join('\n'), { x: 0.6, y: 2.8, w: W - 1.2, h: 2.5, fontSize: 10.5, color: H_.navy, fontFace: 'Arial', lineSpacingMultiple: 1.4 });
+  }
+
+  // ---- Slide: At-Risk Modules ----
+  var riskSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(riskSlide);
+  riskSlide.addText('At-Risk Modules (' + atRiskMods.length + ')', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  riskSlide.addText('A module is flagged at risk when it is both less than 50% complete and already has at least one overdue task. It is behind schedule with little buffer left to recover, unlike a module that is merely slow but still on track.', { x: 0.5, y: 1.25, w: W - 1, h: 0.6, italic: true, fontSize: 10.5, color: H_.dim, fontFace: 'Arial' });
+  if (atRiskMods.length) {
+    var riskBoxH = 0.5 + atRiskMods.length * 0.4;
+    riskSlide.addShape('roundRect', { x: 0.5, y: 2.1, w: W - 1, h: riskBoxH, rectRadius: 0.05, fill: { color: H_.panel }, line: { color: H_.danger, width: 1 } });
+    riskSlide.addText(atRiskMods.map(function(m) { return '• ' + m; }).join('\n'), { x: 0.8, y: 2.3, w: W - 1.6, h: riskBoxH - 0.2, fontSize: 12, bold: true, color: H_.danger, fontFace: 'Arial', lineSpacingMultiple: 1.4 });
+  } else {
+    riskSlide.addText('None -- no module is both below 50% complete and overdue.', { x: 0.5, y: 2.1, w: 10, h: 0.4, bold: true, fontSize: 12, color: H_.success, fontFace: 'Arial' });
+  }
+
+  // ---- Slide(s): Schedule Slippage ----
+  function slippageTableSlide(title, items, emptyMsg) {
+    var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(slide);
+    slide.addText(title, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    slide.addText('Slippage is the number of days a task\'s Target End Date has moved past its original Plan End Date. A positive number means the committed schedule has already drifted from the original plan, even if the task is not overdue yet.', { x: 0.5, y: 1.2, w: W - 1, h: 0.65, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+    if (!items.length) {
+      slide.addText(emptyMsg, { x: 0.5, y: 2.0, w: 10, h: 0.4, bold: true, fontSize: 12, color: H_.success, fontFace: 'Arial' });
+      return;
+    }
+    var rows = [[
+      { text: 'Module', options: { bold: true, color: 'FFFFFF', fill: { color: H_.warning } } },
+      { text: 'Task', options: { bold: true, color: 'FFFFFF', fill: { color: H_.warning } } },
+      { text: 'Plan End', options: { bold: true, color: 'FFFFFF', fill: { color: H_.warning }, align: 'center' } },
+      { text: 'Target End', options: { bold: true, color: 'FFFFFF', fill: { color: H_.warning }, align: 'center' } },
+      { text: 'Slippage', options: { bold: true, color: 'FFFFFF', fill: { color: H_.warning }, align: 'center' } },
+      { text: 'Assigned To', options: { bold: true, color: 'FFFFFF', fill: { color: H_.warning } } }
+    ]];
+    items.forEach(function(s, i) {
+      var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+      rows.push([
+        { text: s.title, options: { bold: true, fontSize: 9, fill: { color: zebra } } },
+        { text: s.description || '-', options: { fontSize: 9, fill: { color: zebra } } },
+        { text: s.plan_end || '-', options: { fontSize: 9, align: 'center', fill: { color: zebra } } },
+        { text: s.target_end || '-', options: { fontSize: 9, align: 'center', fill: { color: zebra } } },
+        { text: '+' + s.slippage_days + 'd', options: { fontSize: 9, align: 'center', bold: true, color: s.slippage_days > 14 ? H_.danger : H_.warning, fill: { color: zebra } } },
+        { text: s.assigned_to || '-', options: { fontSize: 8.5, color: H_.dim, fill: { color: zebra } } }
+      ]);
+    });
+    slide.addTable(rows, {
+      x: 0.5, y: 2.0, w: W - 1,
+      colW: [(W - 1) * 0.17, (W - 1) * 0.28, (W - 1) * 0.11, (W - 1) * 0.11, (W - 1) * 0.11, (W - 1) * 0.22],
+      fontSize: 9, border: { type: 'solid', color: H_.border, pt: 0.75 },
+      autoPage: true, autoPageRepeatHeader: true, autoPageHeaderRows: 1,
+      newSlideStartY: 0.9, masterSlideName: 'SW_BASE'
+    });
+  }
+  slippageTableSlide('Schedule Slippage (' + slippage.length + ')', slippage, 'None -- no task\'s Target End Date has slipped past its Plan End Date.');
+
+  // Every overdue/upcoming task listed in full as a real table -- autoPage
+  // lets pptxgenjs spill onto as many extra slides as needed rather than
+  // truncating with a "+N more" note.
+  function attentionTableSlide(title, items, accentColor, emptyMsg) {
+    var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+    header(slide);
+    slide.addText(title, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+    if (!items.length) {
+      slide.addText(emptyMsg, { x: 0.5, y: 1.4, w: 10, h: 0.4, bold: true, fontSize: 12, color: H_.success, fontFace: 'Arial' });
+      return;
+    }
+    var rows = [[
+      { text: 'Module', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor } } },
+      { text: 'Task', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor } } },
+      { text: 'Plan End', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor }, align: 'center' } },
+      { text: 'Target End', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor }, align: 'center' } },
+      { text: 'Assigned To', options: { bold: true, color: 'FFFFFF', fill: { color: accentColor } } }
+    ]];
+    items.forEach(function(it, i) {
+      var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+      rows.push([
+        { text: it.title, options: { bold: true, fontSize: 9, fill: { color: zebra } } },
+        { text: it.description || '-', options: { fontSize: 9, fill: { color: zebra } } },
+        { text: it.plan_end || '-', options: { fontSize: 9, align: 'center', bold: reportDatePassed(it.plan_end), color: reportDatePassed(it.plan_end) ? accentColor : H_.navy, fill: { color: zebra } } },
+        { text: it.target_end || '-', options: { fontSize: 9, align: 'center', bold: reportDatePassed(it.target_end), color: reportDatePassed(it.target_end) ? accentColor : H_.navy, fill: { color: zebra } } },
+        { text: it.assigned_to || '-', options: { fontSize: 8.5, color: H_.dim, fill: { color: zebra } } }
+      ]);
+    });
+    slide.addTable(rows, {
+      x: 0.5, y: 1.3, w: W - 1,
+      colW: [(W - 1) * 0.20, (W - 1) * 0.32, (W - 1) * 0.12, (W - 1) * 0.12, (W - 1) * 0.24],
+      fontSize: 9, border: { type: 'solid', color: H_.border, pt: 0.75 },
+      autoPage: true, autoPageRepeatHeader: true, autoPageHeaderRows: 1,
+      newSlideStartY: 0.9, masterSlideName: 'SW_BASE'
+    });
+  }
+  attentionTableSlide('Overdue Tasks (' + overdue.length + ')', overdue, H_.danger, 'None -- no incomplete tasks past their Plan End or Target End Date.');
+  attentionTableSlide('Upcoming Deadlines, Next 14 Days (' + upcoming.length + ')', upcoming, H_.accent, 'None scheduled in the next 14 days.');
+
+  return pptx;
+}
+
+function pptxReportFileName(data) {
+  var parts = [data.client, data.projek_name, 'Status_Report'].filter(Boolean);
+  return parts.join('_').replace(/[^a-z0-9_\-]+/gi, '_') + '.pptx';
+}
+
+function downloadProjectReportPptx(btn) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  var projekName = params.get('projek_name');
+  if (!client) {
+    alert('Select a single client first to generate a project report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PPTX...');
+  var url = '/api/project_report_data?client=' + encodeURIComponent(client);
+  if (projekName) url += '&projek_name=' + encodeURIComponent(projekName);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var pptx = buildProjectReportPptx(res.data, logoDataUrl);
+      return pptx.writeFile({ fileName: pptxReportFileName(res.data) });
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
+
+/* ---------- Warranty / Maintenance ticket PDF + PPTX report ----------
+   Same "derive everything from existing fields, no hand-written
+   narrative" rule as the Project report above, from /api/ticket_report_data
+   (built by build_ticket_report_data in api/index.py). Shares
+   REPORT_BRAND/PPTX_HEX, formalTableLayout, loadImageDataUrl,
+   setButtonLoading/restoreButton and the reportDatePassed-style helpers
+   with the project report rather than redefining them. */
+function ticketStatusColor(status) {
+  var B = REPORT_BRAND;
+  if (status === 'Completed' || status === 'Closed') return B.success;
+  if (status === 'Pending') return B.warning;
+  if (status === 'In Progress') return B.accent;
+  return B.dim;
+}
+function ticketPriorityColor(priority) {
+  var B = REPORT_BRAND;
+  var p = (priority || '').toLowerCase();
+  if (p.indexOf('high') !== -1 || p.indexOf('critical') !== -1 || p.indexOf('urgent') !== -1) return B.danger;
+  if (p.indexOf('medium') !== -1) return B.warning;
+  return B.dim;
+}
+
+/* Horizontal count bar for the ticket report's analytics tables (monthly
+   trend, ageing buckets) -- same visual language as reportProgressCell,
+   but scaled against a caller-supplied max count instead of a fixed 0-100
+   percentage, since these are raw ticket counts, not percentages. */
+function pdfCountBar(count, maxCount, color) {
+  var w = 130, h = 9;
+  var barW = maxCount > 0 ? Math.max(w * count / maxCount, count > 0 ? 4 : 0) : 0;
+  return {
+    columns: [
+      { width: w, canvas: [
+        { type: 'rect', x: 0, y: 0, w: w, h: h, r: 4, color: '#e2e8f0' },
+        { type: 'rect', x: 0, y: 0, w: barW, h: h, r: 4, color: color }
+      ] },
+      { width: 8, text: '' },
+      { width: 'auto', text: String(count), bold: true, fontSize: 9, margin: [0, -1, 0, 0] }
+    ]
+  };
+}
+
+/* Blends a hex color toward white by (1 - intensity) -- used as a light
+   heatmap tint behind a pivot-table cell's number (0 = white, 1 = full
+   color), so the Monthly Trend by Project table reads at a glance without
+   needing an actual chart per project. */
+function shadeColor(hex, intensity) {
+  intensity = Math.max(0, Math.min(1, intensity));
+  var n = parseInt(hex.replace('#', ''), 16);
+  var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  var mix = function(c) { return Math.round(255 + (c - 255) * (0.15 + intensity * 0.55)); };
+  var toHex = function(c) { return mix(c).toString(16).padStart(2, '0'); };
+  return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+
+function ticketReportFileName(data, ext) {
+  var parts = [data.client, data.category, 'Status_Report'].filter(Boolean);
+  return parts.join('_').replace(/[^a-z0-9_\-]+/gi, '_') + '.' + ext;
+}
+
+function buildTicketReportDoc(data, logoDataUrl) {
+  var B = REPORT_BRAND;
+  var m = data.metrics || {};
+  var content = [];
+
+  content.push({
+    stack: [
+      logoDataUrl ? { image: logoDataUrl, width: 200, alignment: 'center' } : { text: '' },
+      { canvas: [{ type: 'line', x1: 240, y1: 0, x2: 315, y2: 0, lineWidth: 1.5, lineColor: B.accent }], margin: [0, 28, 0, 28] },
+      { text: (data.category || 'TICKET').toUpperCase() + ' STATUS REPORT', style: 'coverKicker', alignment: 'center' },
+      { text: data.client, style: 'coverTitle', alignment: 'center', margin: [0, 12, 0, 0] },
+      { text: data.category, style: 'coverSubtitle', alignment: 'center', margin: [0, 4, 0, 0] },
+      {
+        margin: [50, 56, 50, 0],
+        table: {
+          widths: ['*', '*', '*', '*'],
+          body: [
+            [{ text: 'TOTAL TICKETS', style: 'coverLabel' }, { text: 'COMPLETED', style: 'coverLabel' }, { text: 'OPEN', style: 'coverLabel' }, { text: 'SLA BREACHES', style: 'coverLabel' }],
+            [{ text: String(m.total || 0), style: 'coverValue' }, { text: String(m.completed || 0), style: 'coverValue' }, { text: String((m.pending || 0) + (m.in_progress || 0)), style: 'coverValue' }, { text: String(m.sla_breach || 0), style: 'coverValue', color: (m.sla_breach || 0) > 0 ? B.danger : '#1a1a1a' }]
+          ]
+        },
+        layout: {
+          hLineWidth: function(i) { return (i === 0 || i === 2) ? 0.75 : 0; },
+          vLineWidth: function() { return 0; },
+          hLineColor: function() { return '#1a1a1a'; },
+          paddingTop: function() { return 6; },
+          paddingBottom: function() { return 12; }
+        }
+      }
+    ],
+    margin: [0, 100, 0, 0]
+  });
+  content.push({ text: '', pageBreak: 'after' });
+
+  content.push({ text: 'Executive Summary', style: 'h1' });
+  content.push({
+    columns: [
+      { width: 150, stack: [
+        { text: (m.completed_pct || 0).toFixed(0) + '%', style: 'bigStat', color: progressColor(m.completed_pct || 0) },
+        { text: 'Tickets Completed', style: 'bigStatLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: (m.total || 0) + ' ticket(s) total -- ' + (m.pending || 0) + ' pending, ' + (m.in_progress || 0) + ' in progress, ' + (m.completed || 0) + ' completed.', margin: [0, 4, 0, 4] },
+        { text: (m.sla_breach || 0) + ' SLA breach(es) recorded.', color: (m.sla_breach || 0) > 0 ? B.danger : B.dim, fontSize: 9.5, bold: (m.sla_breach || 0) > 0 }
+      ] }
+    ],
+    margin: [0, 8, 0, 16]
+  });
+
+  var res = data.resolution || {};
+  content.push({ text: 'Resolution Performance', style: 'h2' });
+  content.push({
+    columns: [
+      { width: '*', stack: [
+        { text: res.sla_compliance_pct != null ? res.sla_compliance_pct.toFixed(0) + '%' : 'n/a', style: 'statValue', color: res.sla_compliance_pct != null ? progressColor(res.sla_compliance_pct) : B.dim },
+        { text: 'SLA Compliance', style: 'statLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: res.avg_days != null ? res.avg_days.toFixed(1) : 'n/a', style: 'statValue', color: B.accent },
+        { text: 'Avg Days to Close', style: 'statLabel' }
+      ] },
+      { width: '*', stack: [
+        { text: res.median_days != null ? res.median_days.toFixed(1) : 'n/a', style: 'statValue', color: B.accent },
+        { text: 'Median Days to Close', style: 'statLabel' }
+      ] }
+    ],
+    margin: [0, 4, 0, 20]
+  });
+
+  content.push({ text: 'Status Breakdown', style: 'h2' });
+  var statusRows = [[{ text: 'Status', style: 'th' }, { text: 'Count', style: 'th' }]];
+  (data.status_counts || []).forEach(function(s) {
+    statusRows.push([{ text: s.status, bold: true, color: ticketStatusColor(s.status) }, { text: String(s.count), alignment: 'center' }]);
+  });
+  content.push({ table: { headerRows: 1, widths: ['*', 80], body: statusRows }, layout: formalTableLayout(), margin: [0, 4, 0, 16] });
+
+  content.push({ text: 'Priority Breakdown', style: 'h2' });
+  var priorityRows = [[{ text: 'Priority', style: 'th' }, { text: 'Count', style: 'th' }]];
+  (data.priority_counts || []).forEach(function(p) {
+    priorityRows.push([{ text: p.priority, bold: true, color: ticketPriorityColor(p.priority) }, { text: String(p.count), alignment: 'center' }]);
+  });
+  if (!(data.priority_counts || []).length) priorityRows.push([{ text: 'No priority data available.', colSpan: 2, color: B.dim }, {}]);
+  content.push({ table: { headerRows: 1, widths: ['*', 80], body: priorityRows }, layout: formalTableLayout(), margin: [0, 4, 0, 20] });
+
+  content.push({ text: 'Tickets by Project', style: 'h2' });
+  content.push({ text: 'Sorted by open ticket count (Pending + In Progress), so the project needing the most attention sorts to the top.', style: 'note', margin: [0, 0, 0, 6] });
+  var projRows = [[
+    { text: 'Project', style: 'th' }, { text: 'Total', style: 'th' }, { text: 'Completed', style: 'th' },
+    { text: 'Pending', style: 'th' }, { text: 'In Progress', style: 'th' }, { text: 'SLA Breaches', style: 'th' }
+  ]];
+  (data.project_counts || []).forEach(function(p) {
+    projRows.push([
+      { text: p.project, bold: true },
+      { text: String(p.total), alignment: 'center' },
+      { text: String(p.completed), alignment: 'center', color: B.success },
+      { text: String(p.pending), alignment: 'center', color: B.warning },
+      { text: String(p.in_progress), alignment: 'center', color: B.accent },
+      { text: String(p.sla_breach), alignment: 'center', color: p.sla_breach > 0 ? B.danger : undefined, bold: p.sla_breach > 0 }
+    ]);
+  });
+  if (!(data.project_counts || []).length) projRows.push([{ text: 'No project data available.', colSpan: 6, color: B.dim }, {}, {}, {}, {}, {}]);
+  content.push({ table: { headerRows: 1, widths: ['*', 45, 65, 55, 70, 75], body: projRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 20] });
+
+  content.push({ text: 'Ticket Analytics', style: 'h1', pageBreak: 'before' });
+  content.push({ text: 'Monthly Trend', style: 'h2' });
+  content.push({ text: 'Tickets raised vs. resolved per calendar month.', style: 'note', margin: [0, 0, 0, 6] });
+  var trend = data.monthly_trend || [];
+  if (trend.length) {
+    var trendMax = Math.max.apply(null, trend.map(function(t) { return Math.max(t.created, t.completed); }).concat([1]));
+    content.push({
+      columns: [
+        { width: 10, canvas: [{ type: 'rect', x: 0, y: 2, w: 10, h: 10, color: B.accent }] },
+        { width: 'auto', text: 'Created', fontSize: 8.5, color: B.dim, margin: [4, 0, 16, 0] },
+        { width: 10, canvas: [{ type: 'rect', x: 0, y: 2, w: 10, h: 10, color: B.success }] },
+        { width: 'auto', text: 'Completed', fontSize: 8.5, color: B.dim, margin: [4, 0, 0, 0] }
+      ],
+      margin: [0, 0, 0, 6]
+    });
+    var trendRows = [[{ text: 'Month', style: 'th' }, { text: 'Created', style: 'th' }, { text: 'Completed', style: 'th' }]];
+    trend.forEach(function(t) {
+      trendRows.push([t.label, pdfCountBar(t.created, trendMax, B.accent), pdfCountBar(t.completed, trendMax, B.success)]);
+    });
+    content.push({ table: { headerRows: 1, widths: [70, '*', '*'], body: trendRows }, layout: formalTableLayout(), margin: [0, 0, 0, 20] });
+  } else {
+    content.push({ text: 'No dated tickets available to chart.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Monthly Trend by Project', style: 'h2' });
+  content.push({ text: 'Tickets raised per month, per project. Capped to the top ' + 6 + ' projects by ticket volume, with the rest grouped into "Other".', style: 'note', margin: [0, 0, 0, 6] });
+  var byProject = data.monthly_trend_by_project || [];
+  if (byProject.length && trend.length) {
+    var byProjMax = Math.max.apply(null, byProject.map(function(s) { return Math.max.apply(null, s.points.map(function(pt) { return pt.created; }).concat([0])); }).concat([1]));
+    var projHeader = [{ text: 'Month', style: 'th' }].concat(byProject.map(function(s) { return { text: s.project, style: 'th', fontSize: 7.5 }; }));
+    var projPivotRows = [projHeader];
+    trend.forEach(function(t, i) {
+      var row = [{ text: t.label, bold: true, fontSize: 8 }];
+      byProject.forEach(function(s) {
+        var count = s.points[i] ? s.points[i].created : 0;
+        var intensity = byProjMax > 0 ? count / byProjMax : 0;
+        row.push({ text: String(count), alignment: 'center', fontSize: 8, bold: count > 0, color: count > 0 ? B.navy : B.dim, fillColor: count > 0 ? shadeColor(B.accent, intensity) : undefined });
+      });
+      projPivotRows.push(row);
+    });
+    content.push({
+      table: { headerRows: 1, widths: [55].concat(byProject.map(function() { return '*'; })), body: projPivotRows },
+      layout: {
+        hLineWidth: function() { return 0.5; }, vLineWidth: function() { return 0.5; },
+        hLineColor: function() { return '#b9c4d0'; }, vLineColor: function() { return '#b9c4d0'; },
+        paddingLeft: function() { return 3; }, paddingRight: function() { return 3; },
+        paddingTop: function() { return 3; }, paddingBottom: function() { return 3; }
+      },
+      margin: [0, 0, 0, 20]
+    });
+  } else {
+    content.push({ text: 'No project-dated tickets available to chart.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Open Ticket Ageing', style: 'h2' });
+  content.push({ text: 'How long currently open (Pending/In Progress) tickets have been sitting.', style: 'note', margin: [0, 0, 0, 6] });
+  var ageBuckets = data.ageing_buckets || [];
+  var ageColors = { '1-30 Days': B.accent, '31-60 Days': B.warning, '> 60 Days': B.danger };
+  if (ageBuckets.length && ageBuckets.some(function(a) { return a.count > 0; })) {
+    var ageMax = Math.max.apply(null, ageBuckets.map(function(a) { return a.count; }).concat([1]));
+    var ageRows = [[{ text: 'Age Bucket', style: 'th' }, { text: 'Open Tickets', style: 'th' }]];
+    ageBuckets.forEach(function(a) {
+      ageRows.push([a.bucket, pdfCountBar(a.count, ageMax, ageColors[a.bucket] || B.accent)]);
+    });
+    content.push({ table: { headerRows: 1, widths: [90, '*'], body: ageRows }, layout: formalTableLayout(), margin: [0, 0, 0, 20] });
+  } else {
+    content.push({ text: 'No open tickets with ageing data.', color: B.dim, margin: [0, 0, 0, 20] });
+  }
+
+  content.push({ text: 'Ticket Details', style: 'h1', pageBreak: 'before' });
+  var ticketRows = [[
+    { text: 'Ticket No', style: 'th' }, { text: 'Title', style: 'th' }, { text: 'Priority', style: 'th' },
+    { text: 'Status', style: 'th' }, { text: 'Created', style: 'th' }, { text: 'Ageing', style: 'th' }
+  ]];
+  (data.tickets || []).forEach(function(t) {
+    ticketRows.push([
+      t.ticket_no || '-', t.title || '-',
+      { text: t.priority || '-', color: ticketPriorityColor(t.priority) },
+      { text: t.status || '-', bold: true, color: ticketStatusColor(t.status) },
+      t.created || '-', t.ageing || '-'
+    ]);
+  });
+  if (!(data.tickets || []).length) ticketRows.push([{ text: 'No tickets recorded.', colSpan: 6, color: B.dim }, {}, {}, {}, {}, {}]);
+  content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 60, 55, 55], body: ticketRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 4, 0, 0] });
+
+  content.push({ text: 'Attention Needed', style: 'h1', pageBreak: 'before' });
+  var att = data.attention || {};
+  content.push({ text: 'Open Tickets (' + (att.open_tickets || []).length + ')', style: 'h2' });
+  content.push({ text: 'Tickets currently Pending or In Progress -- not yet Completed/Closed.', style: 'note', margin: [0, 0, 0, 6] });
+  if ((att.open_tickets || []).length) {
+    var openRows = [[
+      { text: 'Ticket No', style: 'th' }, { text: 'Title', style: 'th' }, { text: 'Priority', style: 'th' },
+      { text: 'Status', style: 'th' }, { text: 'Created', style: 'th' }, { text: 'Ageing', style: 'th' }
+    ]];
+    att.open_tickets.forEach(function(t) {
+      openRows.push([
+        t.ticket_no || '-', t.title || '-',
+        { text: t.priority || '-', color: ticketPriorityColor(t.priority) },
+        { text: t.status || '-', bold: true, color: ticketStatusColor(t.status) },
+        t.created || '-', t.ageing || '-'
+      ]);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 60, 55, 55], body: openRows }, layout: formalTableLayout(), fontSize: 9, margin: [0, 0, 0, 16] });
+  } else {
+    content.push({ text: 'None -- every ticket is Completed or Closed.', color: B.success, margin: [0, 0, 0, 16] });
+  }
+
+  content.push({ text: 'SLA Breaches (' + (att.sla_breaches || []).length + ')', style: 'h2' });
+  if ((att.sla_breaches || []).length) {
+    var slaRows = [[
+      { text: 'Ticket No', style: 'th' }, { text: 'Title', style: 'th' }, { text: 'Priority', style: 'th' },
+      { text: 'Status', style: 'th' }, { text: 'Created', style: 'th' }
+    ]];
+    att.sla_breaches.forEach(function(t) {
+      slaRows.push([
+        t.ticket_no || '-', t.title || '-',
+        { text: t.priority || '-', color: ticketPriorityColor(t.priority) },
+        { text: t.status || '-', bold: true, color: ticketStatusColor(t.status) },
+        t.created || '-'
+      ]);
+    });
+    content.push({ table: { headerRows: 1, widths: ['auto', '*', 55, 60, 55], body: slaRows }, layout: formalTableLayout(), fontSize: 9 });
+  } else {
+    content.push({ text: 'None -- no SLA breaches recorded.', color: B.success });
+  }
+
+  return {
+    pageMargins: [40, 90, 40, 50],
+    background: function(currentPage, pageSize) {
+      var w = pageSize.width, h = pageSize.height;
+      if (currentPage === 1) {
+        var bandH = 86;
+        return {
+          stack: [
+            { canvas: [
+              { type: 'rect', x: 0, y: 0, w: w, h: 5, color: B.accent },
+              { type: 'rect', x: 0, y: h - bandH, w: w, h: bandH, color: '#1a1a1a' }
+            ] },
+            {
+              absolutePosition: { x: 0, y: h - bandH + 22 },
+              columns: [{ width: w, stack: [
+                { text: 'CONFIDENTIAL', color: '#ffffff', bold: true, fontSize: 11, alignment: 'center', characterSpacing: 2 },
+                { text: 'For Internal & Client Distribution Only', color: '#9aa4b0', fontSize: 8.5, alignment: 'center', margin: [0, 4, 0, 0] }
+              ] }]
+            }
+          ]
+        };
+      }
+      if (!logoDataUrl) return null;
+      var boxSize = Math.min(w, h) * 0.55;
+      var logoAspect = 250 / 110;
+      var logoW = boxSize, logoH = boxSize / logoAspect;
+      return {
+        image: logoDataUrl, fit: [boxSize, boxSize], opacity: 0.05,
+        absolutePosition: { x: (w - logoW) / 2, y: (h - logoH) / 2 }
+      };
+    },
+    header: function(currentPage) {
+      if (currentPage === 1) return null;
+      return {
+        margin: [40, 20, 40, 0],
+        columns: [
+          logoDataUrl ? { image: logoDataUrl, width: 45 } : { text: '' },
+          { text: B.name, margin: [8, 2, 0, 0], fontSize: 9, bold: true, color: B.navy },
+          { text: (data.category || '') + ' Status Report', alignment: 'right', fontSize: 9, color: B.dim }
+        ]
+      };
+    },
+    footer: function(currentPage, pageCount) {
+      if (currentPage === 1) return null;
+      return { text: currentPage + ' / ' + pageCount, alignment: 'center', fontSize: 8, color: B.dim, margin: [0, 10, 0, 0] };
+    },
+    content: content,
+    defaultStyle: { fontSize: 10, color: '#1a1a1a' },
+    styles: {
+      coverKicker: { fontSize: 10.5, bold: true, color: '#5a6b7a', characterSpacing: 2 },
+      coverTitle: { fontSize: 27, bold: true, color: '#1a1a1a' },
+      coverSubtitle: { fontSize: 14, color: B.accent },
+      coverLabel: { fontSize: 8, bold: true, color: '#5a6b7a', characterSpacing: 0.5, alignment: 'center' },
+      coverValue: { fontSize: 11, bold: true, color: '#1a1a1a', margin: [0, 3, 0, 0], alignment: 'center' },
+      h1: { fontSize: 16, bold: true, color: '#1a1a1a', margin: [0, 0, 0, 8] },
+      h2: { fontSize: 12, bold: true, color: B.accent, margin: [0, 4, 0, 6] },
+      th: { bold: true, fontSize: 9, color: '#fff', fillColor: '#1a1a1a' },
+      note: { fontSize: 9, italics: true, color: B.dim },
+      bigStat: { fontSize: 34, bold: true },
+      bigStatLabel: { fontSize: 9, color: B.dim, bold: true },
+      statValue: { fontSize: 22, bold: true, alignment: 'center' },
+      statLabel: { fontSize: 8.5, color: B.dim, bold: true, alignment: 'center', margin: [0, 2, 0, 0] }
+    }
+  };
+}
+
+function downloadTicketReport(btn, category) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  if (!client) {
+    alert('Select a single client first to generate a ' + category.toLowerCase() + ' report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PDF...');
+  var url = '/api/ticket_report_data?client=' + encodeURIComponent(client) + '&category=' + encodeURIComponent(category);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var doc = buildTicketReportDoc(res.data, logoDataUrl);
+      pdfMake.createPdf(doc).download(ticketReportFileName(res.data, 'pdf'));
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
+
+/* ---------- Warranty / Maintenance PPTX report (PptxGenJS) ---------- */
+function ticketPptxColor(hexColor) { return hexColor.replace('#', ''); }
+
+function pptxTicketTableSlide(pptx, header, W, H_, title, subtitle, items, columns, emptyMsg, accentColor) {
+  var slide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(slide, title);
+  slide.addText(title, { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  if (subtitle) slide.addText(subtitle, { x: 0.5, y: 1.2, w: W - 1, h: 0.4, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (!items.length) {
+    slide.addText(emptyMsg, { x: 0.5, y: subtitle ? 1.8 : 1.4, w: 10, h: 0.4, bold: true, fontSize: 12, color: H_.success, fontFace: 'Arial' });
+    return;
+  }
+  var headerRow = columns.map(function(c) {
+    return { text: c.label, options: { bold: true, color: 'FFFFFF', fill: { color: accentColor || H_.navy }, align: c.align || 'left' } };
+  });
+  var rows = [headerRow];
+  items.forEach(function(it, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    rows.push(columns.map(function(c) {
+      var val = it[c.key] != null && it[c.key] !== '' ? String(it[c.key]) : '-';
+      var opts = { fontSize: 9, align: c.align || 'left', fill: { color: zebra } };
+      if (c.color) opts.color = c.color(it);
+      if (c.bold) opts.bold = true;
+      return { text: val, options: opts };
+    }));
+  });
+  var widths = columns.map(function(c) { return (W - 1) * c.w; });
+  slide.addTable(rows, {
+    x: 0.5, y: subtitle ? 1.7 : 1.3, w: W - 1, colW: widths,
+    fontSize: 9, border: { type: 'solid', color: H_.border, pt: 0.75 },
+    autoPage: true, autoPageRepeatHeader: true, autoPageHeaderRows: 1,
+    newSlideStartY: 0.9, masterSlideName: 'SW_BASE'
+  });
+}
+
+function buildTicketReportPptx(data, logoDataUrl) {
+  var pptx = new PptxGenJS();
+  pptx.layout = 'LAYOUT_WIDE';
+  var W = 13.33, H = 7.5;
+  var H_ = PPTX_HEX;
+  var m = data.metrics || {};
+  pptx.defineSlideMaster({ title: 'SW_BASE', background: { color: 'FFFFFF' } });
+
+  function header(slide, pageLabel) {
+    slide.addShape('rect', { x: 0, y: 0, w: W, h: 0.5, fill: { color: 'FFFFFF' }, line: { type: 'none' } });
+    if (logoDataUrl) slide.addImage({ data: logoDataUrl, x: 0.4, y: 0.12, w: 0.7, h: 0.7 * 110 / 250 });
+    slide.addText(REPORT_BRAND.name, { x: 1.2, y: 0.12, w: 5, h: 0.3, fontSize: 9, bold: true, color: H_.navy, fontFace: 'Arial' });
+    slide.addText(pageLabel || (data.category + ' Status Report'), { x: W - 5.4, y: 0.12, w: 5, h: 0.3, align: 'right', fontSize: 9, color: H_.dim, fontFace: 'Arial' });
+    slide.addShape('rect', { x: 0, y: 0.5, w: W, h: 0.015, fill: { color: H_.border }, line: { type: 'none' } });
+  }
+
+  // ---- Slide 1: Cover ----
+  var cover = pptx.addSlide({ masterName: 'SW_BASE' });
+  cover.addShape('rect', { x: 0, y: 0, w: W, h: 0.06, fill: { color: H_.accent }, line: { type: 'none' } });
+  var bandH = 0.85;
+  cover.addShape('rect', { x: 0, y: H - bandH, w: W, h: bandH, fill: { color: H_.navy }, line: { type: 'none' } });
+  cover.addText('CONFIDENTIAL', { x: 0, y: H - bandH + 0.2, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: 'FFFFFF', charSpacing: 3, fontFace: 'Arial' });
+  cover.addText('For Internal & Client Distribution Only', { x: 0, y: H - bandH + 0.5, w: W, h: 0.25, align: 'center', fontSize: 9, color: 'AEB9C4', fontFace: 'Arial' });
+  if (logoDataUrl) {
+    var logoW = 3.4, logoH = logoW * 110 / 250;
+    cover.addImage({ data: logoDataUrl, x: (W - logoW) / 2, y: 0.75, w: logoW, h: logoH });
+  }
+  cover.addShape('rect', { x: W / 2 - 0.5, y: 2.55, w: 1.0, h: 0.018, fill: { color: H_.accent }, line: { type: 'none' } });
+  cover.addText((data.category || 'TICKET').toUpperCase() + ' STATUS REPORT', { x: 0, y: 2.75, w: W, h: 0.3, align: 'center', bold: true, fontSize: 13, color: H_.dim, charSpacing: 2.5, fontFace: 'Arial' });
+  cover.addText(data.client, { x: 0.5, y: 3.1, w: W - 1, h: 0.6, align: 'center', bold: true, fontSize: 30, color: H_.navy, fontFace: 'Arial' });
+  cover.addText(data.category, { x: 0, y: 3.72, w: W, h: 0.4, align: 'center', fontSize: 16, color: H_.accent, fontFace: 'Arial' });
+  var factY = 4.5;
+  cover.addShape('rect', { x: 1.5, y: factY, w: W - 3.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+  var facts = [
+    ['TOTAL TICKETS', String(m.total || 0)],
+    ['COMPLETED', String(m.completed || 0)],
+    ['OPEN', String((m.pending || 0) + (m.in_progress || 0))],
+    ['SLA BREACHES', String(m.sla_breach || 0)]
+  ];
+  var factW = (W - 3.0) / 4;
+  facts.forEach(function(f, i) {
+    var fx = 1.5 + i * factW;
+    cover.addText(f[0], { x: fx, y: factY + 0.12, w: factW, h: 0.25, align: 'center', bold: true, fontSize: 8, color: H_.dim, charSpacing: 0.5, fontFace: 'Arial' });
+    cover.addText(f[1], { x: fx, y: factY + 0.38, w: factW, h: 0.35, align: 'center', bold: true, fontSize: 11, color: H_.navy, fontFace: 'Arial' });
+  });
+  cover.addShape('rect', { x: 1.5, y: factY + 0.85, w: W - 3.0, h: 0.012, fill: { color: H_.navy }, line: { type: 'none' } });
+
+  // ---- Slide 2: Executive Summary ----
+  var exec = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(exec);
+  exec.addText('Executive Summary', { x: 0.5, y: 0.7, w: 8, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  pptxRingSlide(exec, 0.4, 1.25, 3.4, 3.0, m.completed_pct || 0, 'Tickets Completed', (m.total || 0) + ' total ticket(s)');
+  exec.addText((m.total || 0) + ' ticket(s) total -- ' + (m.pending || 0) + ' pending, ' + (m.in_progress || 0) + ' in progress, ' + (m.completed || 0) + ' completed.', { x: 4.0, y: 1.9, w: 8.8, h: 0.4, fontSize: 11, color: H_.navy, fontFace: 'Arial' });
+  exec.addText((m.sla_breach || 0) + ' SLA breach(es) recorded.', { x: 4.0, y: 2.4, w: 8.8, h: 0.4, fontSize: 11, bold: (m.sla_breach || 0) > 0, color: (m.sla_breach || 0) > 0 ? H_.danger : H_.dim, fontFace: 'Arial' });
+
+  var res = data.resolution || {};
+  exec.addText('RESOLUTION PERFORMANCE', { x: 0.4, y: 3.55, w: 8, h: 0.3, bold: true, fontSize: 11, color: H_.dim, charSpacing: 1, fontFace: 'Arial' });
+  var resStats = [
+    ['SLA Compliance', res.sla_compliance_pct != null ? res.sla_compliance_pct.toFixed(0) + '%' : 'n/a', res.sla_compliance_pct != null ? pptxProgressColor(res.sla_compliance_pct) : H_.dim],
+    ['Avg Days to Close', res.avg_days != null ? res.avg_days.toFixed(1) : 'n/a', H_.accent],
+    ['Median Days to Close', res.median_days != null ? res.median_days.toFixed(1) : 'n/a', H_.accent]
+  ];
+  var resW = 2.9, resGap = 0.2, resY = 3.95;
+  resStats.forEach(function(s, i) {
+    var rx = 0.4 + i * (resW + resGap);
+    exec.addShape('roundRect', { x: rx, y: resY, w: resW, h: 1.15, rectRadius: 0.06, fill: { color: H_.panel }, line: { color: H_.border, width: 0.75 } });
+    exec.addText(s[1], { x: rx, y: resY + 0.14, w: resW, h: 0.55, align: 'center', bold: true, fontSize: 24, color: s[2], fontFace: 'Arial' });
+    exec.addText(s[0], { x: rx, y: resY + 0.75, w: resW, h: 0.3, align: 'center', fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  });
+
+  // ---- Slide: Monthly Trend ----
+  var trend = data.monthly_trend || [];
+  var trendSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(trendSlide);
+  trendSlide.addText('Monthly Trend', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  trendSlide.addText('Tickets raised vs. resolved per calendar month.', { x: 0.5, y: 1.2, w: W - 1, h: 0.35, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (trend.length) {
+    trendSlide.addChart('bar', [
+      { name: 'Created', labels: trend.map(function(t) { return t.label; }), values: trend.map(function(t) { return t.created; }) },
+      { name: 'Completed', labels: trend.map(function(t) { return t.label; }), values: trend.map(function(t) { return t.completed; }) }
+    ], {
+      x: 0.5, y: 1.7, w: W - 1, h: H - 2.4,
+      barDir: 'col', barGrouping: 'clustered',
+      chartColors: [H_.accent, H_.success],
+      showLegend: true, legendPos: 'b',
+      showTitle: false, catAxisLabelColor: H_.dim, valAxisLabelColor: H_.dim,
+      catAxisLabelFontSize: 9, valAxisLabelFontSize: 9
+    });
+  } else {
+    trendSlide.addText('No dated tickets available to chart.', { x: 0.5, y: 2.0, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide: Monthly Trend by Project ----
+  var byProject = data.monthly_trend_by_project || [];
+  var projTrendSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(projTrendSlide);
+  projTrendSlide.addText('Monthly Trend by Project', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  projTrendSlide.addText('Tickets raised per month, per project. Capped to the top 6 projects by ticket volume, with the rest grouped into "Other".', { x: 0.5, y: 1.2, w: W - 1, h: 0.35, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (byProject.length && trend.length) {
+    var projPalette = [H_.accent, H_.success, H_.warning, H_.danger, H_.teal, H_.navy, H_.dim];
+    projTrendSlide.addChart('line', byProject.map(function(s, i) {
+      return { name: s.project, labels: s.points.map(function(pt) { return pt.label; }), values: s.points.map(function(pt) { return pt.created; }) };
+    }), {
+      x: 0.5, y: 1.7, w: W - 1, h: H - 2.4,
+      chartColors: byProject.map(function(s, i) { return s.project === 'Other' ? H_.dim : projPalette[i % projPalette.length]; }),
+      lineSize: 2, lineDataSymbol: 'none',
+      showLegend: true, legendPos: 'b', legendFontSize: 9,
+      showTitle: false, catAxisLabelColor: H_.dim, valAxisLabelColor: H_.dim,
+      catAxisLabelFontSize: 7, valAxisLabelFontSize: 9,
+      catAxisLabelRotate: 45
+    });
+  } else {
+    projTrendSlide.addText('No project-dated tickets available to chart.', { x: 0.5, y: 2.0, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide: Open Ticket Ageing ----
+  var ageBuckets = data.ageing_buckets || [];
+  var ageColors = { '1-30 Days': H_.accent, '31-60 Days': H_.warning, '> 60 Days': H_.danger };
+  var ageSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(ageSlide);
+  ageSlide.addText('Open Ticket Ageing', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  ageSlide.addText('How long currently open (Pending/In Progress) tickets have been sitting.', { x: 0.5, y: 1.2, w: W - 1, h: 0.35, italic: true, fontSize: 9.5, color: H_.dim, fontFace: 'Arial' });
+  if (ageBuckets.length && ageBuckets.some(function(a) { return a.count > 0; })) {
+    ageSlide.addChart('bar', [{ name: 'Open Tickets', labels: ageBuckets.map(function(a) { return a.bucket; }), values: ageBuckets.map(function(a) { return a.count; }) }], {
+      x: 1.5, y: 1.7, w: W - 3, h: H - 2.4,
+      barDir: 'col', chartColors: ageBuckets.map(function(a) { return ageColors[a.bucket] || H_.accent; }), valueBarColors: true,
+      showLegend: false, showTitle: false, catAxisLabelColor: H_.dim, valAxisLabelColor: H_.dim,
+      catAxisLabelFontSize: 10, valAxisLabelFontSize: 9, showValue: true, dataLabelColor: H_.navy, dataLabelFontSize: 10
+    });
+  } else {
+    ageSlide.addText('No open tickets with ageing data.', { x: 0.5, y: 2.0, w: 10, h: 0.4, color: H_.dim, fontFace: 'Arial' });
+  }
+
+  // ---- Slide 3: Status + Priority breakdown ----
+  var statusSlide = pptx.addSlide({ masterName: 'SW_BASE' });
+  header(statusSlide);
+  statusSlide.addText('Status & Priority Breakdown', { x: 0.5, y: 0.7, w: 10, h: 0.5, bold: true, fontSize: 22, color: H_.navy, fontFace: 'Arial' });
+  var statusRows = [[{ text: 'Status', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } }, { text: 'Count', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }]];
+  (data.status_counts || []).forEach(function(s, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    statusRows.push([{ text: s.status, options: { bold: true, fill: { color: zebra } } }, { text: String(s.count), options: { align: 'center', fill: { color: zebra } } }]);
+  });
+  statusSlide.addTable(statusRows, { x: 0.5, y: 1.4, w: 5.5, colW: [3.7, 1.8], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 } });
+  var priorityRows = [[{ text: 'Priority', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy } } }, { text: 'Count', options: { bold: true, color: 'FFFFFF', fill: { color: H_.navy }, align: 'center' } }]];
+  (data.priority_counts || []).forEach(function(p, i) {
+    var zebra = i % 2 === 1 ? H_.panel : 'FFFFFF';
+    priorityRows.push([{ text: p.priority, options: { bold: true, fill: { color: zebra } } }, { text: String(p.count), options: { align: 'center', fill: { color: zebra } } }]);
+  });
+  if ((data.priority_counts || []).length) {
+    statusSlide.addTable(priorityRows, { x: 6.5, y: 1.4, w: 5.5, colW: [3.7, 1.8], fontSize: 10, border: { type: 'solid', color: H_.border, pt: 0.75 } });
+  }
+
+  // ---- Slide: Tickets by Project ----
+  var projectCols = [
+    { key: 'project', label: 'Project', w: 0.32 },
+    { key: 'total', label: 'Total', w: 0.13, align: 'center' },
+    { key: 'completed', label: 'Completed', w: 0.15, align: 'center', color: function() { return H_.success; } },
+    { key: 'pending', label: 'Pending', w: 0.13, align: 'center', color: function() { return H_.warning; } },
+    { key: 'in_progress', label: 'In Progress', w: 0.15, align: 'center', color: function() { return H_.accent; } },
+    { key: 'sla_breach', label: 'SLA Breaches', w: 0.12, align: 'center', color: function(it) { return it.sla_breach > 0 ? H_.danger : H_.navy; }, bold: true }
+  ];
+  pptxTicketTableSlide(pptx, header, W, H_, 'Tickets by Project', 'Sorted by open ticket count (Pending + In Progress), so the project needing the most attention sorts to the top.', data.project_counts || [], projectCols, 'No project data available.');
+
+  // ---- Slide(s): Ticket Details (full list) ----
+  var ticketCols = [
+    { key: 'ticket_no', label: 'Ticket No', w: 0.14 },
+    { key: 'title', label: 'Title', w: 0.32 },
+    { key: 'priority', label: 'Priority', w: 0.14, align: 'center', color: function(it) { return ticketPptxColor(ticketPriorityColor(it.priority)); } },
+    { key: 'status', label: 'Status', w: 0.16, align: 'center', bold: true, color: function(it) { return ticketPptxColor(ticketStatusColor(it.status)); } },
+    { key: 'created', label: 'Created', w: 0.12, align: 'center' },
+    { key: 'ageing', label: 'Ageing', w: 0.12, align: 'center' }
+  ];
+  pptxTicketTableSlide(pptx, header, W, H_, 'Ticket Details', null, data.tickets || [], ticketCols, 'No tickets recorded.');
+
+  // ---- Slide(s): Attention Needed -- Open Tickets ----
+  var att = data.attention || {};
+  pptxTicketTableSlide(pptx, header, W, H_, 'Open Tickets (' + (att.open_tickets || []).length + ')', 'Tickets currently Pending or In Progress -- not yet Completed/Closed.', att.open_tickets || [], ticketCols, 'None -- every ticket is Completed or Closed.');
+
+  // ---- Slide(s): Attention Needed -- SLA Breaches ----
+  var slaCols = ticketCols.slice(0, 5);
+  pptxTicketTableSlide(pptx, header, W, H_, 'SLA Breaches (' + (att.sla_breaches || []).length + ')', null, att.sla_breaches || [], slaCols, 'None -- no SLA breaches recorded.', H_.danger);
+
+  return pptx;
+}
+
+function downloadTicketReportPptx(btn, category) {
+  var params = new URLSearchParams(window.location.search);
+  var client = params.get('client');
+  if (!client) {
+    alert('Select a single client first to generate a ' + category.toLowerCase() + ' report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating PPTX...');
+  var url = '/api/ticket_report_data?client=' + encodeURIComponent(client) + '&category=' + encodeURIComponent(category);
+
+  fetch(url).then(function(r) { return r.json(); }).then(function(res) {
+    if (!res.success) {
+      alert('Could not generate report: ' + (res.error || 'unknown error'));
+      return null;
+    }
+    return loadImageDataUrl('/static/logo_report.png').catch(function() { return null; }).then(function(logoDataUrl) {
+      var pptx = buildTicketReportPptx(res.data, logoDataUrl);
+      return pptx.writeFile({ fileName: ticketReportFileName(res.data, 'pptx') });
+    });
+  }).catch(function(e) {
+    alert('Failed to generate report: ' + e.message);
+  }).finally(function() {
+    restoreButton(btn, original);
+  });
+}
 
 function toggleEdit8() {
   var btn = document.getElementById('editBtn8');
@@ -1708,17 +3687,19 @@ function toggleEdit8() {
     if (!editMode) {
       t.querySelectorAll('td.editable-cell').forEach(function(cell) {
         cell.innerHTML = buildEditableCellInput(cell);
-        var inp = cell.querySelector('input');
-        inp.addEventListener('input', function() {
+        var inp = cell.querySelector('input, select');
+        var markChanged = function() {
           if (this.value !== this.getAttribute('data-original')) {
             this.classList.add('changed');
           } else {
             this.classList.remove('changed');
           }
-        });
+        };
+        inp.addEventListener('input', markChanged);
+        if (inp.tagName === 'SELECT') inp.addEventListener('change', markChanged);
       });
     } else {
-      t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+      t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
         revertEditableCellToText(inp.parentNode, inp);
       });
     }
@@ -1729,7 +3710,7 @@ function saveChanges8() {
   var pending = [];
   var tables = document.querySelectorAll('#tab-8 table');
   tables.forEach(function(t) {
-    t.querySelectorAll('td.editable-cell input').forEach(function(inp) {
+    t.querySelectorAll('td.editable-cell input, td.editable-cell select').forEach(function(inp) {
       var original = inp.getAttribute('data-original');
       if (inp.value !== original) {
         var td = inp.parentNode;
@@ -1883,6 +3864,35 @@ function doUpload() {
       document.getElementById('uploadProgress').style.display = 'none';
       document.getElementById('uploadResult').innerHTML = '<div class="row-err">Upload failed: ' + escapeHtml(e.message) + '</div>';
       document.getElementById('uploadSubmitBtn').disabled = false;
+    });
+}
+
+/* ---------- Sync from mysupport ---------- */
+function doSyncMysupport() {
+  var btn = document.getElementById('syncMysupportBtn');
+  var originalLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '&#8635; Syncing&hellip;';
+
+  fetch('/api/sync_mysupport', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel;
+      if (result.success) {
+        var msg = result.tickets_inserted + ' new ticket(s), ' + result.tickets_updated + ' updated' +
+          ' &middot; ' + result.projects_inserted + ' new project(s), ' + result.projects_updated + ' updated';
+        showToast('Synced from mysupport: ' + msg, 'success');
+        setTimeout(function() { window.location.reload(); }, 1400);
+      } else {
+        var errText = (result.errors && result.errors.length) ? result.errors.join('; ') : (result.error || 'unknown error');
+        showToast('Sync finished with errors: ' + errText, 'error');
+      }
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel;
+      showToast('Sync failed: ' + e.message, 'error');
     });
 }
 

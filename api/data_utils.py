@@ -73,6 +73,8 @@ COLUMN_MAPPING = {
     "ageing": "Ageing",
     "aging": "Ageing",
     "client": "Client",
+    "technology": "Technology",
+    "tech": "Technology",
 }
 
 # Ticket dataframe columns, in the order they're stored in the DB.
@@ -86,14 +88,26 @@ TICKET_COLUMNS = [
 
 PROJECT_COLUMNS = [
     "Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority",
-    "Start date", "Due date", "Target Date", "Duration", "Assigned to",
-    "Status Progress", "Percentage", "Overall Progress Task (%)", "Source File",
-    "Dedup Seq",
+    "Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date",
+    "Actual Start Date", "Actual End Date", "Duration", "Assigned to",
+    "Status Progress", "Percentage", "Overall Progress Task (%)",
+    "Source File", "Dedup Seq",
+]
+
+# The three date "types" a task can carry: Plan (the originally scheduled
+# dates -- what used to be the sheet's bare Start date/Due date), Target
+# (the current committed date, e.g. after a revision), and Actual (what
+# really happened). Duration and the Gantt chart are both derived from
+# Plan Start/End Date specifically -- see recompute_duration() and
+# build_project_charts() in index.py.
+PROJECT_DATE_COLUMNS = [
+    "Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date",
+    "Actual Start Date", "Actual End Date",
 ]
 
 CLIENT_COLUMNS = [
     "Client", "Projek ID", "Projek Name", "Projek Status",
-    "Start Date", "End Date", "Source File",
+    "Start Date", "End Date", "Technology", "Source File",
 ]
 
 
@@ -231,7 +245,32 @@ def parse_ticket_sheet(df, client, source_file):
         df["Client"] = client
     else:
         df["Client"] = df["Client"].fillna(client)
+    # Client identity is matched by exact string everywhere downstream
+    # (filters, per-client ticket totals, report lookups) -- strip stray
+    # whitespace so a sheet's own Client column can't silently split into
+    # a second, invisible-looking client bucket.
+    df["Client"] = df["Client"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
     df["Source File"] = source_file
+
+    # A client's own ticket sheet can mix warranty-period tickets in with
+    # its regular ones (Task Type == "Warranty") rather than keeping them
+    # on a separate sheet -- e.g. MTIB's sheet has both. The Warranty tab
+    # only ever looks at a shared "Client Warranty" sentinel value (with
+    # the real client recorded in Company instead), so a warranty row
+    # left under its real Client name here would silently never show up
+    # there. Route it automatically at parse time instead of requiring a
+    # manual per-row edit in the source spreadsheet: fall back to this
+    # row's already-resolved Client as Company first, since a sheet like
+    # MTIB's already fills Company on every row but a sheet relying purely
+    # on its own name might not.
+    if "Task Type" in df.columns:
+        is_warranty = df["Task Type"].astype(str).str.strip().str.lower() == "warranty"
+        if is_warranty.any():
+            if "Company" not in df.columns:
+                df["Company"] = None
+            company_blank = df["Company"].isna() | df["Company"].astype(str).str.strip().isin(["", "nan", "None"])
+            df.loc[is_warranty & company_blank, "Company"] = df.loc[is_warranty & company_blank, "Client"]
+            df.loc[is_warranty, "Client"] = "Client Warranty"
 
     df = convert_dtypes(df)
 
@@ -301,9 +340,43 @@ def parse_project_sheet(df, source_file):
     rename_map = {c: "Projek Name" for c in df.columns if str(c).strip().lower() in ("projek name", "projek_name")}
     if rename_map:
         df = df.rename(columns=rename_map)
+
+    # The source sheet still carries the old bare "Start date"/"Due date"/
+    # "Target Date" headers -- fold them into the Plan/Target date scheme
+    # here so nothing needs to change upstream in the workbook. Old Start
+    # date/Due date become the Plan dates (they always meant "originally
+    # scheduled"); the old single Target Date becomes Target End Date,
+    # since it was used as a one-sided deadline, not a range.
+    legacy_date_rename = {}
+    if "Start date" in df.columns and "Plan Start Date" not in df.columns:
+        legacy_date_rename["Start date"] = "Plan Start Date"
+    if "Due date" in df.columns and "Plan End Date" not in df.columns:
+        legacy_date_rename["Due date"] = "Plan End Date"
+    if "Target Date" in df.columns and "Target End Date" not in df.columns:
+        legacy_date_rename["Target Date"] = "Target End Date"
+    if legacy_date_rename:
+        df = df.rename(columns=legacy_date_rename)
+
     if "Client" in df.columns:
         df["Client"] = df["Client"].ffill()
     df["Source File"] = source_file
+
+    # Module grouping everywhere downstream (the Home/Project pages, and
+    # the PDF/PPTX reports) matches rows to a module by exact Title string
+    # equality -- so a re-upload where the same module got retyped with a
+    # trailing space, doubled internal space, or different capitalization
+    # (trivially easy in Excel: autocorrect, copy-paste, a re-typed header)
+    # silently creates a second, separate module group instead of merging
+    # into the existing one. Normalize whitespace and casing here, once, at
+    # the only place new data enters the system, rather than requiring
+    # every consumer to normalize before comparing.
+    for norm_col in ("Title", "Client"):
+        if norm_col in df.columns:
+            has_value = df[norm_col].notna()
+            df.loc[has_value, norm_col] = (
+                df.loc[has_value, norm_col].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+            )
+            df.loc[df[norm_col] == "", norm_col] = None
 
     # A project's Title, and every other block-level field (Category,
     # Priority, dates, Assigned to, Status Progress, the overall
@@ -338,10 +411,10 @@ def parse_project_sheet(df, source_file):
     # already blank, so a row with its own genuine value (e.g. every
     # numbered task already has its own date range) is left untouched.
     block_cols = [c for c in [
-        "Projek Name", "Category", "Progress", "Priority", "Start date", "Due date", "Tempoh",
-        "Target Date", "Assigned to", "Status Progress", "Percentage",
+        "Projek Name", "Category", "Progress", "Priority", "Tempoh",
+        "Assigned to", "Status Progress", "Percentage",
         "Overall Progress Task (%)",
-    ] if c in df.columns]
+    ] + PROJECT_DATE_COLUMNS if c in df.columns]
     if block_cols and "Title" in df.columns and "Client" in df.columns:
         df[block_cols] = df.groupby(["Client", "Title"])[block_cols].transform(lambda s: s.ffill())
 
@@ -349,7 +422,7 @@ def parse_project_sheet(df, source_file):
         df["Duration"] = df["Tempoh"].astype(str)
         df.loc[df["Tempoh"].isna(), "Duration"] = None
 
-    for c in ["Start date", "Due date", "Target Date"]:
+    for c in PROJECT_DATE_COLUMNS:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
 
@@ -361,7 +434,7 @@ def parse_project_sheet(df, source_file):
     # counter (never NULL) fixes that: as long as the sheet's row order
     # is unchanged between uploads, the same row gets the same sequence
     # number and updates in place instead of inserting a duplicate.
-    key_basis = df[["Title", "Start date", "Due date", "Description"]] if "Description" in df.columns else df[["Title", "Start date", "Due date"]]
+    key_basis = df[["Title", "Plan Start Date", "Plan End Date", "Description"]] if "Description" in df.columns else df[["Title", "Plan Start Date", "Plan End Date"]]
     df["Dedup Seq"] = key_basis.astype(str).groupby(list(key_basis.columns)).cumcount()
 
     if "Percentage" in df.columns:
@@ -398,6 +471,7 @@ def parse_client_sheet(df, source_file):
 
     if "Client" in df.columns:
         df["Client"] = df["Client"].ffill()
+        df["Client"] = df["Client"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
 
     for c in ["Start Date", "End Date"]:
         if c in df.columns:

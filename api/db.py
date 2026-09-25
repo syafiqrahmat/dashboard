@@ -7,6 +7,7 @@ are matched by a natural key and updated in place, new rows are inserted,
 nothing is ever silently overwritten by an older file.
 """
 import os
+import re
 import warnings
 from contextlib import contextmanager
 
@@ -55,9 +56,12 @@ PROJECT_DB_COLUMNS = [
     ("Category", "category"),
     ("Progress", "progress"),
     ("Priority", "priority"),
-    ("Start date", "start_date"),
-    ("Due date", "due_date"),
-    ("Target Date", "target_date"),
+    ("Plan Start Date", "plan_start_date"),
+    ("Plan End Date", "plan_end_date"),
+    ("Target Start Date", "target_start_date"),
+    ("Target End Date", "target_end_date"),
+    ("Actual Start Date", "actual_start_date"),
+    ("Actual End Date", "actual_end_date"),
     ("Duration", "duration"),
     ("Assigned to", "assigned_to"),
     ("Status Progress", "status_progress"),
@@ -74,6 +78,7 @@ CLIENT_DB_COLUMNS = [
     ("Projek Status", "projek_status"),
     ("Start Date", "start_date"),
     ("End Date", "end_date"),
+    ("Technology", "technology"),
     ("Source File", "source_file"),
 ]
 
@@ -122,6 +127,10 @@ CREATE TABLE IF NOT EXISTS projects (
     status_progress TEXT,
     percentage NUMERIC,
     overall_progress_task NUMERIC,
+    target_start_date DATE,
+    actual_start_date DATE,
+    target_end_date DATE,
+    actual_end_date DATE,
     source_file TEXT,
     dedup_seq INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -133,6 +142,34 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS duration TEXT;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS dedup_seq INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS projek_name TEXT;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_start_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS actual_start_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS target_end_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS actual_end_date DATE;
+
+-- Split into three date "types" (Plan/Target/Actual); the old bare
+-- start_date/due_date/target_date columns are retired from the app (see
+-- PROJECT_DB_COLUMNS) but left in place rather than dropped, and their
+-- data is copied forward once here. start_date/due_date always meant
+-- "originally scheduled", so they become Plan Start/End; the old single
+-- target_date becomes Target End Date (it was a one-sided deadline, not
+-- a range). Only fills rows that haven't already been migrated/edited.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_start_date DATE;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS plan_end_date DATE;
+UPDATE projects SET plan_start_date = start_date WHERE plan_start_date IS NULL AND start_date IS NOT NULL;
+UPDATE projects SET plan_end_date = due_date WHERE plan_end_date IS NULL AND due_date IS NOT NULL;
+UPDATE projects SET target_end_date = target_date WHERE target_end_date IS NULL AND target_date IS NOT NULL;
+
+-- Lets the Project Details table's row/module order be dragged around by
+-- hand instead of being stuck at insertion (id) order. Backfilled from id
+-- the first time this column exists so existing tables keep their current
+-- order until someone actually reorders something; every row inserted
+-- after that always gets an explicit value (see insert_project_row), so
+-- this UPDATE only ever touches genuinely new/legacy NULLs, not rows
+-- someone has already reordered.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS sort_order BIGINT;
+UPDATE projects SET sort_order = id WHERE sort_order IS NULL;
+CREATE INDEX IF NOT EXISTS idx_projects_sort_order ON projects(sort_order);
 
 CREATE TABLE IF NOT EXISTS clients (
     id SERIAL PRIMARY KEY,
@@ -142,11 +179,15 @@ CREATE TABLE IF NOT EXISTS clients (
     projek_status TEXT,
     start_date DATE,
     end_date DATE,
+    technology TEXT,
     source_file TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (client, projek_id)
 );
+
+-- Column added after the table already existed in production.
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS technology TEXT;
 
 -- The source "Client Project" sheet has many rows with a blank title
 -- and/or start/due date (sub-item description lines, section
@@ -166,8 +207,8 @@ DROP INDEX IF EXISTS idx_projects_dedup_key;
 CREATE UNIQUE INDEX idx_projects_dedup_key ON projects (
     COALESCE(client, ''),
     COALESCE(title, ''),
-    COALESCE(start_date, DATE '0001-01-01'),
-    COALESCE(due_date, DATE '0001-01-01'),
+    COALESCE(plan_start_date, DATE '0001-01-01'),
+    COALESCE(plan_end_date, DATE '0001-01-01'),
     COALESCE(description, ''),
     dedup_seq
 );
@@ -287,8 +328,15 @@ def _records_for_insert(df, columns):
     return list(df.itertuples(index=False, name=None))
 
 
-def upsert_tickets(df, conn=None):
+def upsert_tickets(df, conn=None, sync_columns=None):
     """Insert new tickets / update existing ones (matched by client + ticket no).
+
+    `sync_columns`, when given, restricts which non-key columns get
+    overwritten on an existing row (used by the mysupport sync, which only
+    has data for a subset of fields -- Priority/SLA/Ageing/etc. are left
+    exactly as they are instead of being blanked out). Defaults to every
+    mapped column, i.e. the original full-overwrite behavior used by the
+    manual Excel/CSV upload.
 
     Returns (inserted_count, updated_count).
     """
@@ -298,6 +346,8 @@ def upsert_tickets(df, conn=None):
     records = _records_for_insert(df, TICKET_DB_COLUMNS)
     db_cols = [c for _, c in TICKET_DB_COLUMNS]
     update_cols = [c for c in db_cols if c not in ("client", "ticket_no")]
+    if sync_columns is not None:
+        update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     sql = f"""
@@ -318,14 +368,17 @@ def upsert_tickets(df, conn=None):
     return inserted, updated
 
 
-def upsert_projects(df, conn=None):
+def upsert_projects(df, conn=None, sync_columns=None):
+    """See upsert_tickets() for what `sync_columns` does."""
     if df.empty:
         return 0, 0
 
     records = _records_for_insert(df, PROJECT_DB_COLUMNS)
     db_cols = [c for _, c in PROJECT_DB_COLUMNS]
-    key_cols = ("client", "title", "start_date", "due_date", "description", "dedup_seq")
+    key_cols = ("client", "title", "plan_start_date", "plan_end_date", "description", "dedup_seq")
     update_cols = [c for c in db_cols if c not in key_cols]
+    if sync_columns is not None:
+        update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     # Must match idx_projects_dedup_key's expressions exactly for
@@ -336,8 +389,8 @@ def upsert_projects(df, conn=None):
         ON CONFLICT (
             COALESCE(client, ''),
             COALESCE(title, ''),
-            COALESCE(start_date, DATE '0001-01-01'),
-            COALESCE(due_date, DATE '0001-01-01'),
+            COALESCE(plan_start_date, DATE '0001-01-01'),
+            COALESCE(plan_end_date, DATE '0001-01-01'),
             COALESCE(description, ''),
             dedup_seq
         ) DO UPDATE SET
@@ -355,8 +408,80 @@ def upsert_projects(df, conn=None):
     return inserted, updated
 
 
-def upsert_clients(df, conn=None):
+def renumber_projects_sort_order(conn=None):
+    """Re-group any project rows that share a (Client, Title) module but
+    have drifted apart in sort_order back into one contiguous block.
+
+    upsert_projects() intentionally leaves a brand-new row's sort_order
+    unset -- SCHEMA_SQL's `UPDATE projects SET sort_order = id WHERE
+    sort_order IS NULL` (which reruns on every app startup, see
+    init_schema()) then "heals" it to that row's own id, which is always
+    higher than everything already there. A module whose sheet gained
+    extra tasks in a later upload therefore has its new tasks land at the
+    very end of the whole table instead of next to the rest of that
+    module -- and the Project Details page's Overall Progress Task (%)
+    merged-cell rendering (see build_project_charts() in index.py) only
+    merges *contiguous* same-(Client, Title) rows, so the module then
+    displays as two separate groups.
+
+    Also re-sorts *within* each module by the leading number in
+    Description (e.g. "9. Integrasi..." before "10. Doc UAT..." before
+    "12. FAT..."), instead of upload/arrival order -- a later upload's
+    rows land after the module's existing ones (see above), which
+    otherwise leaves e.g. "12. FAT" sitting before "13. Training" and
+    "14. Go Live" but ahead of "10."/"11." simply because 10-14 came from
+    an earlier upload than 12 did. Plain arrival order is kept as the
+    fallback for a description with no leading number, so nothing
+    disappears or gets pushed somewhere arbitrary.
+
+    Fixes this generally, independent of insert/update history: read the
+    table in its current (possibly split/misordered) order, stable-sort
+    every row to (a) the position of its (Client, Title) group's *first*
+    appearance, then (b) its own leading Description number if it has
+    one, then renumber sequentially. A module that's already contiguous
+    and numerically ordered is left exactly where it was. Call this once
+    after any project upsert so neither problem can recur.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT id, client, title, description FROM projects ORDER BY sort_order NULLS LAST, id")
+            rows = cur.fetchall()
+            if not rows:
+                return
+
+            group_first_pos = {}
+            for pos, (row_id, client, title, description) in enumerate(rows):
+                key = (client, title)
+                if key not in group_first_pos:
+                    group_first_pos[key] = pos
+
+            def desc_number(description):
+                m = re.match(r"\s*(\d+)\s*\.", description or "")
+                return int(m.group(1)) if m else None
+
+            indexed = list(enumerate(rows))
+            indexed.sort(key=lambda item: (
+                group_first_pos[(item[1][1], item[1][2])],
+                (0, desc_number(item[1][3])) if desc_number(item[1][3]) is not None else (1, item[0]),
+            ))
+
+            updates = [(new_order + 1, row_id) for new_order, (_, (row_id, _, _, _)) in enumerate(indexed)]
+            # Not touching updated_at here -- this is purely a display-order
+            # repair, not a change to the row's actual data, and bumping it
+            # for every project on every upload would falsely make
+            # everything look freshly edited.
+            psycopg2.extras.execute_values(
+                cur,
+                "UPDATE projects AS p SET sort_order = v.new_order "
+                "FROM (VALUES %s) AS v(new_order, id) WHERE p.id = v.id",
+                updates, page_size=500,
+            )
+
+
+def upsert_clients(df, conn=None, sync_columns=None):
     """Insert new client rows / update existing ones (matched by client + projek id).
+
+    See upsert_tickets() for what `sync_columns` does.
 
     Returns (inserted_count, updated_count).
     """
@@ -366,6 +491,8 @@ def upsert_clients(df, conn=None):
     records = _records_for_insert(df, CLIENT_DB_COLUMNS)
     db_cols = [c for _, c in CLIENT_DB_COLUMNS]
     update_cols = [c for c in db_cols if c not in ("client", "projek_id")]
+    if sync_columns is not None:
+        update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
     sql = f"""
@@ -483,7 +610,7 @@ def get_filter_metadata(conn=None):
 def fetch_projects_df(conn=None):
     db_cols = [c for _, c in PROJECT_DB_COLUMNS]
     display_cols = [c for c, _ in PROJECT_DB_COLUMNS]
-    sql = f"SELECT id, {', '.join(db_cols)} FROM projects ORDER BY id"
+    sql = f"SELECT id, {', '.join(db_cols)} FROM projects ORDER BY sort_order NULLS LAST, id"
 
     with db_connection(conn) as c:
         df = pd.read_sql_query(sql, c)
@@ -494,7 +621,7 @@ def fetch_projects_df(conn=None):
     df = df.rename(columns=dict(zip(db_cols, display_cols)))
     df = df.rename(columns={"id": "_row_idx", "Source File": "_source_file"})
 
-    for col in ["Start date", "Due date", "Target Date"]:
+    for col in ["Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date", "Actual Start Date", "Actual End Date"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col])
 
@@ -635,24 +762,79 @@ def insert_project_row(db_values, conn=None):
                 """SELECT COUNT(*) FROM projects
                    WHERE COALESCE(client,'') = COALESCE(%s,'')
                      AND COALESCE(title,'') = COALESCE(%s,'')
-                     AND COALESCE(start_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
-                     AND COALESCE(due_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
+                     AND COALESCE(plan_start_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
+                     AND COALESCE(plan_end_date, DATE '0001-01-01') = COALESCE(%s::date, DATE '0001-01-01')
                      AND COALESCE(description,'') = COALESCE(%s,'')""",
                 (
                     values.get("client"), values.get("title"),
-                    values.get("start_date"), values.get("due_date"),
+                    values.get("plan_start_date"), values.get("plan_end_date"),
                     values.get("description"),
                 ),
             )
             dedup_seq = cur.fetchone()[0]
             cols = list(values.keys())
-            col_list = ", ".join(cols + ["dedup_seq"])
+            # sort_order comes from a subquery, not a bound parameter, so a
+            # freshly added row always lands at the end of the current
+            # display order rather than defaulting to NULL (which would
+            # sort first under NULLS LAST... no -- NULLS LAST already
+            # keeps it last, but giving it a real value here means a
+            # *later* reorder can freely move it without a NULL ever
+            # comparing oddly against real sort_order values).
+            col_list = ", ".join(cols + ["dedup_seq", "sort_order"])
             placeholders = ", ".join(["%s"] * (len(cols) + 1))
             cur.execute(
-                f"INSERT INTO projects ({col_list}) VALUES ({placeholders}) RETURNING id",
+                f"INSERT INTO projects ({col_list}) VALUES "
+                f"({placeholders}, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM projects)) RETURNING id",
                 [values[c] for c in cols] + [dedup_seq],
             )
             return cur.fetchone()[0]
+
+
+def reorder_project_rows(ids, conn=None):
+    """Reassign sort_order for exactly this set of project row ids, in the
+    order given, reusing the same set of sort_order values those rows
+    already occupy (just permuted). That confines the change to swapping
+    these rows/blocks among themselves -- every other row's sort_order,
+    and therefore its position relative to rows outside this set, is left
+    completely untouched.
+    """
+    ids = [int(i) for i in ids]
+    if not ids:
+        return
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("SELECT id, sort_order FROM projects WHERE id = ANY(%s)", (ids,))
+            rows = dict(cur.fetchall())
+            missing = [i for i in ids if i not in rows]
+            if missing:
+                raise ValueError(f"Unknown project row id(s): {missing}")
+            slots = sorted(v if v is not None else k for k, v in rows.items())
+            for row_id, slot in zip(ids, slots):
+                cur.execute(
+                    "UPDATE projects SET sort_order = %s, updated_at = now() WHERE id = %s",
+                    (slot, row_id),
+                )
+
+
+def delete_project_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM projects WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
+
+
+def delete_ticket_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM tickets WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
+
+
+def delete_client_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM clients WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
 
 
 def insert_client_row(db_values, conn=None):

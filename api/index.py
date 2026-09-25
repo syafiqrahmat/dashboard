@@ -21,6 +21,7 @@ load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env.local"), override=True)
 
 import db
+import mysupport_sync
 from data_utils import (
     COLORS, PRIORITY_COLORS, AGEING_COLORS,
     parse_ticket_sheet, parse_project_sheet, parse_client_sheet, detect_ticket_sheets,
@@ -42,6 +43,14 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 app.secret_key = os.environ.get("SECRET_KEY", "sw-dashboard-session-signing-key-change-me")
 
 PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+# The Client sheet's row for KUIPS's Warranty project is filed under
+# "UNISIRAJ" (its Projek ID/Name both spell out KUIPS, e.g.
+# "KUIPSSAGA007"/"SAGA KUIPS" -- same entity, inconsistent naming between
+# sheets), while its tickets use Company/Client="KUIPS". Used wherever a
+# Home page client name needs to be translated into the name its ticket
+# data actually uses.
+CLIENT_DISPLAY_ALIASES = {"UNISIRAJ": "KUIPS"}
 
 # Vercel sets this automatically on every deploy -- using it as the
 # service worker's cache-name/version means sw.js's bytes (and therefore
@@ -247,7 +256,7 @@ def build_warranty_charts(df):
         fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False, xaxis_tickangle=-45)
         charts["project_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    display_cols = ["Ticket No", "Task Type", "Project", "Company", "Ticket Title", "Priority", "Ticket Status", "Ticket Created Date", "Days"]
+    display_cols = ["Ticket No", "Task Type", "Project", "Company", "Ticket Title", "Priority", "Ticket Status", "Ticket Created Date", "Days", "Ageing"]
     avail = [c for c in display_cols if c in warranty_df.columns]
     meta_cols = [c for c in ["_row_idx", "Source File"] if c in warranty_df.columns]
     detail = warranty_df[avail + meta_cols].copy()
@@ -288,7 +297,13 @@ def recompute_overall_progress(df):
         basis = basis.dropna()
         return round(basis.mean(), 1) if not basis.empty else None
 
-    overall_by_group = df.groupby(["Client", "Title"]).apply(lambda g: group_overall(g.index), include_groups=False)
+    # A plain dict (not .groupby().apply()) sidesteps a pandas edge case:
+    # when every group's computed value is None -- as happens for a module
+    # with no Percentage data at all, e.g. YIPS's "Outstanding Development"
+    # rows -- .apply() can't decide whether the combined result is a Series
+    # or an empty DataFrame and raises "Data must be 1-dimensional, got
+    # ndarray of shape (0, 0)" instead of just returning all-None.
+    overall_by_group = {key: group_overall(g.index) for key, g in df.groupby(["Client", "Title"])}
     df["Overall Progress Task (%)"] = df.set_index(["Client", "Title"]).index.map(overall_by_group).to_numpy()
     return df
 
@@ -324,6 +339,64 @@ def recompute_status_from_percentage(df):
     return df
 
 
+def recompute_duration(df):
+    """Duration is derived, not typed -- Plan Start Date through Plan End
+    Date, inclusive of both ends, with Saturdays not counted (so a 7-day
+    calendar week is 6 days of duration). Recomputed on every load so
+    editing either date always keeps Duration in sync, the same way
+    Status Progress stays in sync with Percentage.
+    """
+    if df.empty or not {"Plan Start Date", "Plan End Date"}.issubset(df.columns):
+        return df
+
+    df = df.copy()
+
+    def duration_for(row):
+        start, end = row["Plan Start Date"], row["Plan End Date"]
+        if pd.isna(start) or pd.isna(end) or end < start:
+            return None
+        days = (end - start).days + 1
+        saturdays = sum(1 for i in range(days) if (start + pd.Timedelta(days=i)).weekday() == 5)
+        return f"{days - saturdays} days"
+
+    df["Duration"] = df.apply(duration_for, axis=1)
+    return df
+
+
+def resolve_project_scope(project_df, filters):
+    """Narrow the full projects table down to whatever (Client, Projek
+    Name) the current filters ask for. Shared by the Project tab and the
+    PDF report endpoint so both scope to a project the exact same way.
+
+    The projects table is independent of the tickets table (no shared
+    filter query), so a client selected via the sidebar/Overall Client
+    table has to be applied here explicitly.
+    """
+    if filters.get("clients") and "Client" in project_df.columns:
+        project_df = project_df[project_df["Client"].isin(filters["clients"])]
+    # Unlike tickets (no real Projek Name field, only a best-effort guess
+    # against Project), projects rows carry Projek Name directly, so this
+    # is an exact match -- still falls back to the unnarrowed set if it
+    # matches nothing, same safety rule as the ticket side.
+    projek_name = filters.get("projek_name")
+    if projek_name and "Projek Name" in project_df.columns and not project_df.empty:
+        narrowed = project_df[project_df["Projek Name"] == projek_name]
+        if not narrowed.empty:
+            project_df = narrowed
+        elif project_df["Projek Name"].isna().all():
+            # Some clients' Client Project sheet rows never carry their
+            # own Projek Name at all (e.g. LKTN) -- there's nothing to
+            # disambiguate against, so it's safe to label every row with
+            # the project that was actually clicked instead of leaving
+            # the column blank. If the client's rows DO carry a
+            # (different, non-matching) Projek Name elsewhere, this
+            # branch is skipped and the unnarrowed set is shown instead,
+            # same safety rule as the ticket side.
+            project_df = project_df.copy()
+            project_df["Projek Name"] = projek_name
+    return project_df
+
+
 def build_project_charts(df):
     charts = {}
     if df.empty:
@@ -339,15 +412,44 @@ def build_project_charts(df):
         "in_progress": in_progress, "not_started": not_started,
     }
 
-    if "Client" in df.columns:
-        valid_clients = df.dropna(subset=["Client"])
-        if not valid_clients.empty:
-            cc = valid_clients["Client"].value_counts().reset_index()
-            cc.columns = ["Client", "Count"]
-            fig = px.bar(cc, x="Client", y="Count", title="Projects by Client",
-                          color="Client", text="Count")
-            fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"), showlegend=False)
-            charts["client_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
+    # "Projects by Client" collapses to a single, useless one-bar chart
+    # whenever the sidebar has already scoped the page down to one client
+    # (the common case -- it's identical to "all projects" only when every
+    # client is being viewed at once). Show progress per module (Title)
+    # instead: that's informative both scoped to one client and across all
+    # of them, and doubles as an at-a-glance progress readout.
+    if "Title" in df.columns and "Overall Progress Task (%)" in df.columns:
+        module_df = df.dropna(subset=["Title"])
+        module_df = module_df[module_df["Title"].astype(str).str.strip() != ""]
+        if not module_df.empty:
+            group_cols = ["Client", "Title"] if "Client" in module_df.columns else ["Title"]
+            # keep="first" on the table's own row order (not a groupby,
+            # which would alphabetize) so the chart's bar order matches
+            # the Project Details table below it, exactly like the
+            # table's own row order is never re-sorted either.
+            modules = module_df.drop_duplicates(subset=group_cols, keep="first")[group_cols + ["Overall Progress Task (%)"]]
+            modules = modules.dropna(subset=["Overall Progress Task (%)"])
+            if not modules.empty:
+                # Color per module (Title), not per client -- with client
+                # as the color, long module names on the x-axis and a
+                # handful of client swatches in the legend crowded right
+                # up against each other and read as clutter, not a legend.
+                # Each bar already has its own module name on the x-axis,
+                # so a per-module legend would just repeat that -- drop it.
+                fig = px.bar(
+                    modules, x="Title", y="Overall Progress Task (%)",
+                    title="Module Progress", text="Overall Progress Task (%)",
+                    color="Title",
+                    category_orders={"Title": modules["Title"].tolist()},
+                )
+                fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+                fig.update_layout(
+                    template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#374151"), xaxis_tickangle=-45, xaxis_title="Module",
+                    yaxis_title="Overall Progress (%)", yaxis_range=[0, 110],
+                    showlegend=False,
+                )
+                charts["client_bar"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
     if "Status Progress" in df.columns:
         valid_status = df.dropna(subset=["Status Progress"])
@@ -359,8 +461,8 @@ def build_project_charts(df):
             fig.update_layout(template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#374151"))
             charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    if "Start date" in df.columns and "Due date" in df.columns and "Title" in df.columns:
-        valid = df.dropna(subset=["Start date", "Due date", "Title"]).copy()
+    if "Target Start Date" in df.columns and "Target End Date" in df.columns and "Title" in df.columns:
+        valid = df.dropna(subset=["Target Start Date", "Target End Date", "Title"]).copy()
         valid = valid[valid["Title"].astype(str).str.strip() != ""]
         if "Description" in valid.columns:
             valid["Task Label"] = valid["Description"].astype(str)
@@ -368,36 +470,187 @@ def build_project_charts(df):
             valid["Task Label"] = valid["Task Label"].str.split("\n").str[0].str.strip()
         else:
             valid["Task Label"] = valid["Title"].astype(str)
+        # A client can have more than one project (e.g. MYCLAIM MARA and
+        # MYOT MARA both under MARA), and both commonly reuse the exact
+        # same task names (Development/UAT/Go Live/...). Row identity by
+        # Task Label alone collapsed those onto the same y-axis row, so
+        # whichever bar happened to overlap in time visually covered the
+        # other one up entirely -- e.g. MyOT's "Go Live" bar hid MyClaim's
+        # own Development/UAT/Go Live bars underneath it. Scope each row to
+        # its own project (Projek Name, falling back to Title) plus task
+        # name so same-named tasks from different projects always get
+        # their own row and are never drawn on top of each other.
+        project_key = valid["Projek Name"].where(valid["Projek Name"].astype(str).str.strip().ne(""), valid["Title"]) if "Projek Name" in valid.columns else valid["Title"]
+        valid["Row Label"] = project_key.astype(str) + ": " + valid["Task Label"]
         if not valid.empty:
             timeline_charts_html = ""
             if "Client" in valid.columns:
                 for client in sorted(valid["Client"].dropna().unique()):
-                    cdf = valid[valid["Client"] == client]
-                    if cdf.empty:
+                    cdf_client = valid[valid["Client"] == client]
+                    if cdf_client.empty:
                         continue
-                    fig = px.timeline(
-                        cdf, x_start="Start date", x_end="Due date",
-                        y="Task Label", color="Client",
-                        title=f"{client} - PROJECT DEVELOPMENT TIMELINE",
-                        color_discrete_sequence=px.colors.qualitative.Plotly,
-                    )
-                    fig.update_yaxes(autorange="reversed", title=None)
-                    fig.update_xaxes(title="Tarikh")
-                    fig.update_layout(
-                        template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="#374151"), showlegend=False,
-                        height=max(200, 30*len(cdf)),
-                    )
-                    timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})}</div>'
+                    # Broken down one Gantt chart per module (Title) instead
+                    # of one giant chart mixing every module's tasks
+                    # together -- each module renders as its own collapsed
+                    # card (see .gantt-title-card / <details> below) so a
+                    # client with several modules (e.g. LKTN's Payroll,
+                    # Claim, Asset, ...) isn't one overwhelming wall of
+                    # bars; the chart for a module only needs to render
+                    # once its card is actually opened. Order preserved
+                    # (not sorted) so cards appear in the same order as the
+                    # Project Details table's modules.
+                    title_cards_html = ""
+                    for title in cdf_client["Title"].drop_duplicates():
+                        cdf = cdf_client[cdf_client["Title"] == title].copy()
+                        if cdf.empty:
+                            continue
+                        # Row Label (Project: Task) usually gives each task
+                        # its own row, but a project can legitimately have
+                        # two rows with the exact same description (a
+                        # generic recurring checklist item like "Sign-off",
+                        # or two "UAT" rounds) -- a *shared string* y-axis
+                        # category collapses those onto one line no matter
+                        # how the string is built. Give every row its own
+                        # guaranteed-unique numeric position instead (one
+                        # row of cdf = one position, always, by
+                        # construction) and only use Row Label as the tick
+                        # text shown at that position -- so two rows with
+                        # identical text still each get their own line.
+                        #
+                        # Preserve cdf's incoming order rather than
+                        # re-sorting it (previously by Row Label/Start
+                        # date) so the chart's row order matches the
+                        # Project Details table's row order -- both
+                        # ultimately come from the same project_df, fetched
+                        # `ORDER BY id`, so as long as neither re-sorts
+                        # they stay in the same sequence.
+                        cdf = cdf.reset_index(drop=True)
+                        cdf["Y Pos"] = cdf.index
+                        # Coloring by Client here was a no-op -- every row
+                        # in cdf already shares the same Client, so every
+                        # bar came out one uniform color. Color by Category
+                        # instead so different kinds of work are visually
+                        # distinguishable; but if this module's tasks are
+                        # all the same Category too (equally uniform,
+                        # equally uninformative), color by the task itself
+                        # (Task Label, from Description) so each bar in the
+                        # timeline still reads as distinct.
+                        categories = cdf["Category"].dropna().unique() if "Category" in cdf.columns else []
+                        color_col = "Category" if len(categories) > 1 else "Task Label"
+                        color_values = sorted(cdf[color_col].dropna().astype(str).unique().tolist())
+                        palette = px.colors.qualitative.Plotly
+                        color_map = {val: palette[i % len(palette)] for i, val in enumerate(color_values)}
+
+                        # A milestone (Start date == Due date, e.g. "Go
+                        # Live") and a real 1-day task (Due date = Start
+                        # date + 1) are both, in plain terms, "this
+                        # happened on one day" -- they used to render
+                        # completely differently (a diamond marker vs. a
+                        # bar), which is the inconsistency being fixed
+                        # here. Both now render as the exact same bar: a
+                        # milestone's Due date is treated as Start date + 1
+                        # day purely for the chart (real Due date/Duration
+                        # elsewhere untouched), so every ~1-day task gets
+                        # identical, standardized sizing regardless of
+                        # which way it happened to be recorded.
+                        chart_due = cdf["Target End Date"].where(cdf["Target End Date"] != cdf["Target Start Date"], cdf["Target Start Date"] + pd.Timedelta(days=1))
+                        cdf = cdf.assign(**{"Chart Due": chart_due})
+
+                        # A short bar does have an actual duration, so it's
+                        # fair to give it a minimum visible length on the
+                        # date axis, scaled to this module's own chart span
+                        # -- this doesn't invent a date range that never
+                        # existed, it just guarantees a short-but-real one
+                        # doesn't round down to invisible. Capped at 2
+                        # days: uncapped, this scaled with the *whole
+                        # chart's* span (which can be dominated by an
+                        # unrelated multi-year task elsewhere in the same
+                        # module), so on a wide enough chart a boosted
+                        # 1-day task could stretch past a genuine,
+                        # unboosted 3-4 day task and visually look longer
+                        # than something that actually took more real time
+                        # -- capping at 2 days keeps it strictly below the
+                        # >2-day tier that never gets boosted, so relative
+                        # ordering is never inverted by the correction
+                        # meant to just aid visibility.
+                        span_days = max((cdf["Chart Due"].max() - cdf["Target Start Date"].min()).days, 1)
+                        min_bar_ms = min(max(1, round(span_days * 0.015)), 2) * 86400000
+
+                        fig = go.Figure()
+                        for val in color_values:
+                            rdf = cdf[cdf[color_col].astype(str) == val]
+                            if rdf.empty:
+                                continue
+                            bar_days = (rdf["Chart Due"] - rdf["Target Start Date"]).dt.days
+                            # Thicker vertically (row height) AND given a
+                            # visible minimum horizontal length -- short
+                            # tasks need to stand out in both directions,
+                            # not just one, and every ~1-day task
+                            # (bar_days <= 1) gets the exact same
+                            # standardized thickness/width.
+                            bar_widths = bar_days.apply(lambda d: 0.9 if d <= 1 else (0.85 if d <= 2 else 0.7))
+                            bar_ms = (rdf["Chart Due"] - rdf["Target Start Date"]).dt.total_seconds() * 1000
+                            bar_ms = bar_ms.where(bar_days > 2, bar_ms.clip(lower=min_bar_ms))
+                            fig.add_trace(go.Bar(
+                                base=rdf["Target Start Date"],
+                                # A raw pandas Timedelta isn't
+                                # JSON-serializable in every Plotly version
+                                # -- milliseconds (a plain float) is how
+                                # Plotly represents a bar's width on a date
+                                # axis internally either way.
+                                x=bar_ms,
+                                y=rdf["Y Pos"], orientation="h", width=bar_widths.tolist(),
+                                name=val, legendgroup=val, marker_color=color_map[val],
+                                customdata=rdf[["Row Label", "Target Start Date", "Target End Date"]].astype(str),
+                                hovertemplate="Row=%{customdata[0]}<br>Start=%{customdata[1]}<br>Due=%{customdata[2]}<extra></extra>",
+                            ))
+
+                        # tickvals/ticktext (not a categorical axis) is
+                        # what lets the same description repeat as text on
+                        # two different rows without Plotly merging them
+                        # back down to one category. margin (row spacing)
+                        # comes from the bar width values above (0.7/0.9),
+                        # leaving 10-30% of each row's slot empty.
+                        fig.update_yaxes(
+                            autorange="reversed", title=None,
+                            tickmode="array", tickvals=cdf["Y Pos"], ticktext=cdf["Task Label"],
+                            tickfont=dict(size=14),
+                        )
+                        fig.update_xaxes(title="Tarikh", type="date")
+                        fig.update_layout(
+                            template="plotly_white", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font=dict(color="#374151"),
+                            # Y-axis already shows the plain task name and
+                            # hovering shows the full project+task+dates,
+                            # so the color-key legend is redundant screen
+                            # space.
+                            showlegend=False,
+                            height=max(420, 95*len(cdf)),
+                            margin=dict(l=180),
+                            font_size=15,
+                        )
+                        chart_html = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False, "responsive": True})
+                        title_label = title if str(title).strip() else "(Untitled)"
+                        title_cards_html += (
+                            f'<details class="gantt-title-card"><summary>{title_label} ({len(cdf)} tasks)</summary>'
+                            f'<div class="gantt-title-card-body">{chart_html}</div></details>'
+                        )
+                    if title_cards_html:
+                        timeline_charts_html += f'<div class="client-section"><h4>{client}</h4>{title_cards_html}</div>'
             charts["timeline_chart"] = timeline_charts_html
 
-    display_cols_p = ["Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority", "Start date", "Due date", "Target Date", "Duration", "Assigned to", "Status Progress", "Percentage", "Overall Progress Task (%)"]
+    display_cols_p = [
+        "Client", "Title", "Projek Name", "Description", "Category", "Progress", "Priority",
+        "Actual Start Date", "Actual End Date", "Plan Start Date", "Plan End Date",
+        "Target Start Date", "Target End Date", "Duration", "Assigned to",
+        "Status Progress", "Percentage", "Overall Progress Task (%)",
+    ]
     avail_p = [c for c in display_cols_p if c in df.columns]
     meta_p = [c for c in ["_row_idx", "_source_file"] if c in df.columns]
     detail = df[avail_p + meta_p].copy()
-    for c in ["Start date", "Due date", "Target Date"]:
+    for c in ["Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date", "Actual Start Date", "Actual End Date"]:
         if c in detail.columns:
-            detail[c] = detail[c].dt.strftime("%d/%m/%Y") if not detail[c].isna().all() else detail[c]
+            detail[c] = detail[c].dt.strftime("%d/%m/%Y") if detail[c].notna().any() else ""
     detail = detail.fillna("")
     detail_records = detail.to_dict("records")
 
@@ -423,10 +676,488 @@ def build_project_charts(df):
     return charts
 
 
-def build_overall_client_charts(df):
+def build_project_report_data(client, projek_name):
+    """Aggregate one project's data into the shape the client-side PDF
+    report (pdfmake, see dashboard.html) renders. Everything here is
+    derived straight from existing fields -- module/task rows, dates,
+    Assigned to -- rather than any hand-written narrative, since the
+    database has no field for that. Returns None if nothing matches.
+    """
+    project_df = load_project_data()
+    project_df = resolve_project_scope(project_df, {"clients": [client] if client else [], "projek_name": projek_name})
+    project_df = recompute_status_from_percentage(project_df)
+    project_df = recompute_overall_progress(project_df)
+    project_df = recompute_duration(project_df)
+    if project_df.empty:
+        return None
+
+    resolved_projek_name = projek_name
+    if not resolved_projek_name and "Projek Name" in project_df.columns:
+        non_blank = project_df["Projek Name"].dropna()
+        if not non_blank.empty:
+            resolved_projek_name = non_blank.iloc[0]
+
+    def fmt_date(v):
+        if v is None or pd.isna(v):
+            return None
+        return v.strftime("%d/%m/%Y")
+
+    # Contract-level info (Technology, Projek Status, contract dates) comes
+    # from the Client sheet/table, a separate source from the task-level
+    # Client Project data above.
+    projek_status = technology = contract_start = contract_end = None
+    try:
+        client_df = load_client_data()
+    except Exception:
+        client_df = pd.DataFrame()
+    if not client_df.empty and "Client" in client_df.columns:
+        cdf = client_df[client_df["Client"] == client]
+        if resolved_projek_name and "Projek Name" in cdf.columns:
+            matched = cdf[cdf["Projek Name"] == resolved_projek_name]
+            if not matched.empty:
+                cdf = matched
+        if not cdf.empty:
+            row0 = cdf.iloc[0]
+            projek_status = row0.get("Projek Status")
+            technology = row0.get("Technology")
+            contract_start = fmt_date(row0.get("Start Date"))
+            contract_end = fmt_date(row0.get("End Date"))
+
+    date_cols = ["Plan Start Date", "Plan End Date", "Target Start Date", "Target End Date", "Actual Start Date", "Actual End Date"]
+
+    modules = []
+    if "Title" in project_df.columns:
+        for title in project_df["Title"].dropna().drop_duplicates():
+            tdf = project_df[project_df["Title"] == title]
+            overall = None
+            if "Overall Progress Task (%)" in tdf.columns:
+                ov = pd.to_numeric(tdf["Overall Progress Task (%)"], errors="coerce").dropna()
+                if not ov.empty:
+                    overall = round(float(ov.iloc[0]), 1)
+            if overall is None and "Percentage" in tdf.columns:
+                pct = pd.to_numeric(tdf["Percentage"], errors="coerce").dropna()
+                if not pct.empty:
+                    overall = round(float(pct.mean()), 1)
+            categories = sorted(set(tdf["Category"].dropna().astype(str))) if "Category" in tdf.columns else []
+            assignees = sorted(set(a.strip() for a in tdf["Assigned to"].dropna().astype(str) if a.strip())) if "Assigned to" in tdf.columns else []
+            module = {
+                "title": str(title),
+                "task_count": int(len(tdf)),
+                "overall_percent": overall if overall is not None else 0,
+                "category": categories[0] if len(categories) == 1 else ("Mixed" if len(categories) > 1 else None),
+                "assignees": assignees,
+            }
+            for c in date_cols:
+                key = c.lower().replace(" ", "_")
+                if c not in tdf.columns:
+                    module[key] = None
+                    continue
+                is_start = c.endswith("Start Date")
+                module[key] = fmt_date(tdf[c].min() if is_start else tdf[c].max())
+            modules.append(module)
+
+    overall_percent = round(sum(m["overall_percent"] for m in modules) / len(modules), 1) if modules else 0
+
+    tasks = []
+    for _, row in project_df.iterrows():
+        desc = row.get("Description")
+        desc = str(desc).split("\n")[0].strip()[:160] if pd.notna(desc) else ""
+        pct = row.get("Percentage")
+        tasks.append({
+            "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
+            "description": desc,
+            "category": row.get("Category") if pd.notna(row.get("Category")) else "",
+            "priority": row.get("Priority") if pd.notna(row.get("Priority")) else "",
+            "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
+            "percentage": float(pct) if pd.notna(pct) else None,
+            "status_progress": row.get("Status Progress") if pd.notna(row.get("Status Progress")) else "",
+            "plan_end": fmt_date(row.get("Plan End Date")),
+            "target_start": fmt_date(row.get("Target Start Date")),
+            "target_end": fmt_date(row.get("Target End Date")),
+            "actual_end": fmt_date(row.get("Actual End Date")),
+        })
+
+    team = {}
+    if "Assigned to" in project_df.columns:
+        for _, row in project_df.iterrows():
+            name = row.get("Assigned to")
+            name = str(name).strip() if pd.notna(name) and str(name).strip() else "Unassigned"
+            entry = team.setdefault(name, {"modules": set(), "task_count": 0, "percentages": []})
+            title = row.get("Title")
+            if pd.notna(title) and str(title).strip():
+                entry["modules"].add(str(title))
+            entry["task_count"] += 1
+            pct = row.get("Percentage")
+            if pd.notna(pct):
+                entry["percentages"].append(float(pct))
+    team_list = [
+        {
+            "name": name,
+            "modules": sorted(entry["modules"]),
+            "task_count": entry["task_count"],
+            "avg_percent": round(sum(entry["percentages"]) / len(entry["percentages"]), 1) if entry["percentages"] else None,
+        }
+        for name, entry in team.items()
+    ]
+    team_list.sort(key=lambda t: t["name"].lower())
+
+    today = pd.Timestamp.now().normalize()
+    overdue, upcoming = [], []
+    has_plan_end = "Plan End Date" in project_df.columns
+    has_target_end = "Target End Date" in project_df.columns
+    if has_plan_end or has_target_end:
+        for _, row in project_df.iterrows():
+            plan_end = row.get("Plan End Date") if has_plan_end else None
+            target_end = row.get("Target End Date") if has_target_end else None
+            plan_end = None if pd.isna(plan_end) else plan_end
+            target_end = None if pd.isna(target_end) else target_end
+            if plan_end is None and target_end is None:
+                continue
+            pct = row.get("Percentage")
+            is_done = pd.notna(pct) and float(pct) >= 100
+            if is_done:
+                continue
+            entry = {
+                "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
+                "description": str(row.get("Description")).split("\n")[0].strip()[:120] if pd.notna(row.get("Description")) else "",
+                "plan_end": fmt_date(plan_end),
+                "target_end": fmt_date(target_end),
+                "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
+            }
+            # A task is overdue the moment either its Plan End or its Target
+            # End has already passed -- Target End slipping past today is
+            # just as much a red flag as Plan End slipping, even if Plan
+            # End itself is still in the future.
+            if (plan_end is not None and plan_end < today) or (target_end is not None and target_end < today):
+                overdue.append(entry)
+            else:
+                soonest = min(d for d in (plan_end, target_end) if d is not None)
+                if soonest <= today + pd.Timedelta(days=14):
+                    upcoming.append(entry)
+
+    low_progress_modules = [m["title"] for m in modules if m["overall_percent"] < 50]
+
+    # Schedule slippage: how many days a task's Target End Date has moved
+    # past its original Plan End Date. This is independent of whether the
+    # task is overdue today -- a task can have already slipped from the
+    # plan while its (revised) target is still comfortably in the future.
+    slippage = []
+    if has_plan_end and has_target_end:
+        for _, row in project_df.iterrows():
+            plan_end = row.get("Plan End Date")
+            target_end = row.get("Target End Date")
+            if pd.isna(plan_end) or pd.isna(target_end):
+                continue
+            days = (target_end - plan_end).days
+            if days <= 0:
+                continue
+            slippage.append({
+                "title": str(row.get("Title")) if pd.notna(row.get("Title")) else "",
+                "description": str(row.get("Description")).split("\n")[0].strip()[:120] if pd.notna(row.get("Description")) else "",
+                "plan_end": fmt_date(plan_end),
+                "target_end": fmt_date(target_end),
+                "slippage_days": int(days),
+                "assigned_to": row.get("Assigned to") if pd.notna(row.get("Assigned to")) else "",
+            })
+    slippage.sort(key=lambda s: s["slippage_days"], reverse=True)
+
+    # At-risk modules: below 50% complete AND already has at least one
+    # overdue task -- behind schedule with little buffer left to recover,
+    # as distinct from a module that is merely slow but not yet late.
+    overdue_module_titles = {o["title"] for o in overdue}
+    at_risk_modules = [m["title"] for m in modules if m["overall_percent"] < 50 and m["title"] in overdue_module_titles]
+
+    return {
+        "client": client,
+        "projek_name": resolved_projek_name,
+        "projek_status": projek_status,
+        "technology": technology,
+        "contract_start": contract_start,
+        "contract_end": contract_end,
+        "generated_at": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+        "overall_percent": overall_percent,
+        "modules": modules,
+        "tasks": tasks,
+        "team": team_list,
+        "attention": {
+            "overdue": overdue,
+            "upcoming": upcoming,
+            "low_progress_modules": low_progress_modules,
+            "slippage": slippage,
+            "at_risk_modules": at_risk_modules,
+        },
+    }
+
+
+def build_ticket_report_data(client, category):
+    """Aggregate one client's Warranty or Maintenance tickets into the shape
+    the client-side PDF/PPTX report (pdfmake/pptxgenjs, see dashboard.html)
+    renders -- the ticket-side counterpart to build_project_report_data.
+    Returns None if nothing matches.
+
+    category is "Warranty" or "Maintenance". Warranty tickets are stored
+    under a shared "Client Warranty" sentinel Client value with the real
+    client only recorded in Company (see build_tab_context's idx == 2
+    branch, which this mirrors), so it needs its own lookup path instead of
+    the plain clients/task_types filter Maintenance uses.
+    """
+    lookup_client = CLIENT_DISPLAY_ALIASES.get(client, client)
+    if category == "Warranty":
+        try:
+            df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
+        except Exception as e:
+            log(f"DB error loading warranty tickets: {e}", "ERROR")
+            df = pd.DataFrame()
+        if "Company" in df.columns:
+            df = df[df["Company"] == lookup_client]
+    else:
+        try:
+            df, _ = load_data({"clients": [lookup_client], "priorities": [], "statuses": [], "task_types": [category], "search": None})
+        except Exception as e:
+            log(f"DB error loading {category} tickets: {e}", "ERROR")
+            df = pd.DataFrame()
+    if df.empty:
+        return None
+
+    def fmt_date(v):
+        if v is None or pd.isna(v):
+            return None
+        return v.strftime("%d/%m/%Y")
+
+    total = len(df)
+    statuses = df["Ticket Status"] if "Ticket Status" in df.columns else pd.Series(dtype=object)
+    completed = int(statuses.isin(["Completed", "Closed"]).sum())
+    pending = int((statuses == "Pending").sum())
+    in_progress = int((statuses == "In Progress").sum())
+    sla_breach = int(df["SLA Breach"].sum()) if "SLA Breach" in df.columns else 0
+
+    metrics = {
+        "total": total, "completed": completed, "pending": pending,
+        "in_progress": in_progress, "sla_breach": sla_breach,
+        "completed_pct": round(completed / total * 100, 1) if total else 0,
+        "pending_pct": round(pending / total * 100, 1) if total else 0,
+        "in_progress_pct": round(in_progress / total * 100, 1) if total else 0,
+    }
+
+    status_counts = []
+    if "Ticket Status" in df.columns:
+        sc = df["Ticket Status"].dropna().value_counts()
+        status_counts = [{"status": k, "count": int(v)} for k, v in sc.items()]
+
+    priority_counts = []
+    if "Priority" in df.columns:
+        pc = df["Priority"].dropna().value_counts()
+        priority_counts = [{"priority": k, "count": int(v)} for k, v in pc.items()]
+
+    # Per-project breakdown -- a client can run tickets against more than
+    # one project (e.g. LKTN's Payroll/Claim/Asset modules each raise their
+    # own tickets), so a flat client-wide total hides which project is
+    # actually driving the ticket load. Sorted by open-ticket count (same
+    # rule build_overall_client_charts uses for its client ranking) so the
+    # project needing the most attention sorts to the top.
+    project_counts = []
+    if "Project" in df.columns:
+        for project, pdf_ in df.groupby(df["Project"].fillna("(No Project)")):
+            statuses = pdf_["Ticket Status"] if "Ticket Status" in pdf_.columns else pd.Series(dtype=object)
+            p_completed = int(statuses.isin(["Completed", "Closed"]).sum())
+            p_pending = int((statuses == "Pending").sum())
+            p_in_progress = int((statuses == "In Progress").sum())
+            project_counts.append({
+                "project": str(project),
+                "total": int(len(pdf_)),
+                "completed": p_completed,
+                "pending": p_pending,
+                "in_progress": p_in_progress,
+                "sla_breach": int(pdf_["SLA Breach"].sum()) if "SLA Breach" in pdf_.columns else 0,
+            })
+        project_counts.sort(key=lambda p: p["pending"] + p["in_progress"], reverse=True)
+
+    def ticket_entry(row):
+        return {
+            "ticket_no": row.get("Ticket No") if pd.notna(row.get("Ticket No")) else "",
+            "task_type": row.get("Task Type") if pd.notna(row.get("Task Type")) else "",
+            "project": row.get("Project") if pd.notna(row.get("Project")) else "",
+            "title": row.get("Ticket Title") if pd.notna(row.get("Ticket Title")) else "",
+            "priority": row.get("Priority") if pd.notna(row.get("Priority")) else "",
+            "status": row.get("Ticket Status") if pd.notna(row.get("Ticket Status")) else "",
+            "created": fmt_date(row.get("Ticket Created Date")),
+            "completed": fmt_date(row.get("Ticket Completed Date")),
+            "closed": fmt_date(row.get("Ticket Closed Date")),
+            "ageing": row.get("Ageing") if pd.notna(row.get("Ageing")) else "",
+            "sla_breach": bool(row.get("SLA Breach")) if pd.notna(row.get("SLA Breach")) else False,
+        }
+
+    # Newest first reads more usefully than source-file order for a report.
+    if "Ticket Created Date" in df.columns:
+        df = df.sort_values("Ticket Created Date", ascending=False, na_position="last")
+    tickets = [ticket_entry(row) for _, row in df.iterrows()]
+
+    open_statuses = {"Pending", "In Progress"}
+    open_tickets = [t for t in tickets if t["status"] in open_statuses]
+    sla_breaches = [t for t in tickets if t["sla_breach"]]
+
+    # Resolution performance -- Days to Close is only populated once a
+    # ticket has actually closed, so this is naturally scoped to resolved
+    # tickets rather than needing its own status filter.
+    avg_days = median_days = None
+    if "Days to Close" in df.columns:
+        valid_days = pd.to_numeric(df["Days to Close"], errors="coerce").dropna()
+        if not valid_days.empty:
+            avg_days = round(float(valid_days.mean()), 1)
+            median_days = round(float(valid_days.median()), 1)
+    sla_compliance_pct = round((total - sla_breach) / total * 100, 1) if total else None
+
+    # Ageing buckets: Ageing is only populated for still-open tickets (see
+    # build_ageing_charts), so this reads as "how old is each open ticket",
+    # not a bucketing of every ticket ever raised.
+    age_order = ["1-30 Days", "31-60 Days", "> 60 Days"]
+    ageing_buckets = []
+    if "Ageing" in df.columns:
+        ac = df["Ageing"].dropna().value_counts().reindex(age_order, fill_value=0)
+        ageing_buckets = [{"bucket": k, "count": int(v)} for k, v in ac.items()]
+
+    # Monthly trend: tickets raised vs. resolved per calendar month, so the
+    # report shows whether the workload is growing or the team is keeping
+    # pace with it, not just a point-in-time snapshot.
+    monthly_trend = []
+    if "Ticket Created Date" in df.columns:
+        created_by_month = df["Ticket Created Date"].dropna().dt.to_period("M").value_counts()
+        completed_col = df["Ticket Completed Date"] if "Ticket Completed Date" in df.columns else pd.Series(dtype="datetime64[ns]")
+        completed_by_month = completed_col.dropna().dt.to_period("M").value_counts()
+        all_months = sorted(set(created_by_month.index) | set(completed_by_month.index))
+        for period in all_months:
+            monthly_trend.append({
+                "month": str(period),
+                "label": period.strftime("%b %Y"),
+                "created": int(created_by_month.get(period, 0)),
+                "completed": int(completed_by_month.get(period, 0)),
+            })
+
+    # Monthly trend broken down by project (tickets raised per month, one
+    # series per project) -- capped to the top few projects by ticket
+    # volume (project_counts is already sorted, just by open count instead,
+    # so re-sort by total here) and the rest folded into "Other", the same
+    # "don't let a long tail make the chart unreadable" rule a chart
+    # library's own top-N grouping would apply. A project with only a
+    # handful of tickets barely shows up on a monthly chart anyway.
+    monthly_trend_by_project = []
+    if "Project" in df.columns and "Ticket Created Date" in df.columns and all_months:
+        MAX_PROJECT_SERIES = 6
+        ranked_projects = sorted(project_counts, key=lambda p: p["total"], reverse=True)
+        top_projects = {p["project"] for p in ranked_projects[:MAX_PROJECT_SERIES]}
+        pdf_ = df.copy()
+        pdf_["_report_project"] = pdf_["Project"].fillna("(No Project)").astype(str)
+        pdf_["_report_project"] = pdf_["_report_project"].where(pdf_["_report_project"].isin(top_projects), "Other")
+        for project, group in pdf_.groupby("_report_project"):
+            created_pm = group["Ticket Created Date"].dropna().dt.to_period("M").value_counts()
+            points = [{"month": str(p), "label": p.strftime("%b %Y"), "created": int(created_pm.get(p, 0))} for p in all_months]
+            monthly_trend_by_project.append({"project": project, "points": points})
+        # "Other" (if present) always last regardless of its volume -- it's
+        # a catch-all bucket, not a project competing for rank.
+        monthly_trend_by_project.sort(key=lambda s: (s["project"] == "Other", -sum(pt["created"] for pt in s["points"])))
+
+    return {
+        "client": client,
+        "category": category,
+        "generated_at": pd.Timestamp.now().strftime("%d/%m/%Y %H:%M"),
+        "metrics": metrics,
+        "status_counts": status_counts,
+        "priority_counts": priority_counts,
+        "project_counts": project_counts,
+        "tickets": tickets,
+        "resolution": {
+            "avg_days": avg_days,
+            "median_days": median_days,
+            "sla_compliance_pct": sla_compliance_pct,
+        },
+        "ageing_buckets": ageing_buckets,
+        "monthly_trend": monthly_trend,
+        "monthly_trend_by_project": monthly_trend_by_project,
+        "attention": {
+            "open_tickets": open_tickets,
+            "sla_breaches": sla_breaches,
+        },
+    }
+
+
+def build_overall_client_charts(df, tickets_df=None, project_df=None):
     charts = {}
     if df.empty:
         return charts
+
+    # Per-client ticket totals for the Maintenance/Warranty sections below.
+    # Tickets aren't reliably linkable to one specific project row (see
+    # _narrow_by_projek_name), so this is aggregated per Client rather than
+    # per Projek Name -- a client with two rows in the same section will
+    # show the same totals on both.
+    def ticket_status_stats(statuses):
+        return {
+            "Pending": int((statuses == "Pending").sum()),
+            "In Progress": int((statuses == "In Progress").sum()),
+            "Total Tickets": int(len(statuses)),
+        }
+
+    ticket_stats_by_client = {}
+    # Warranty tickets are all bucketed under the shared "Client Warranty"
+    # sentinel Client value, with the real client recorded in Company
+    # instead. That's a *separate* dict (not merged into
+    # ticket_stats_by_client) because a client like MTIB has both regular
+    # and warranty tickets -- its Warranty row needs just the warranty
+    # slice, not the same totals its Maintenance row shows.
+    warranty_ticket_stats_by_company = {}
+    if tickets_df is not None and not tickets_df.empty and "Client" in tickets_df.columns and "Ticket Status" in tickets_df.columns:
+        for client, statuses in tickets_df.groupby("Client")["Ticket Status"]:
+            ticket_stats_by_client[client] = ticket_status_stats(statuses)
+        if "Company" in tickets_df.columns:
+            warranty_df = tickets_df[tickets_df["Client"] == "Client Warranty"]
+            for company, statuses in warranty_df.groupby("Company")["Ticket Status"]:
+                warranty_ticket_stats_by_company[company] = ticket_status_stats(statuses)
+
+    # A project's tasks in the Project Details table each carry their own
+    # Actual Start/End Date, which naturally vary from task to task -- there
+    # is no single "the" actual date for the project as a whole. Covering
+    # the full span means taking the earliest Actual Start Date and the
+    # latest Actual End Date across every task under that (Client, Projek
+    # Name), the same way a Gantt chart's overall span is read off its
+    # first and last bars. Keyed by (Client, Projek Name) rather than just
+    # Client so a client with more than one project (e.g. MARA) doesn't
+    # blend two unrelated projects' actual dates together.
+    show_actual_span_cols = (
+        project_df is not None and not project_df.empty
+        and {"Client", "Projek Name", "Actual Start Date", "Actual End Date"}.issubset(project_df.columns)
+    )
+    actual_span_by_project = {}
+    # Fallback for a client whose Client Project rows never carry their own
+    # Projek Name at all (e.g. LKTN, YIK) -- pandas groupby silently drops
+    # NaN keys, so those clients would otherwise never get an entry above.
+    # Aggregated per Client instead; only safe to use when nothing needs
+    # disambiguating (see the "exactly one Development row" check below),
+    # same rule as resolve_project_scope's Projek Name fallback.
+    actual_span_by_client_fallback = {}
+    if show_actual_span_cols:
+        for (client, projek_name), pdf in project_df.groupby(["Client", "Projek Name"]):
+            start_min = pdf["Actual Start Date"].min()
+            end_max = pdf["Actual End Date"].max()
+            if pd.isna(start_min) and pd.isna(end_max):
+                continue
+            actual_span_by_project[(client, projek_name)] = {
+                "Actual Start Date": "" if pd.isna(start_min) else start_min.strftime("%d/%m/%Y"),
+                "Actual End Date": "" if pd.isna(end_max) else end_max.strftime("%d/%m/%Y"),
+            }
+        blank_projek_clients = (
+            set(project_df.loc[project_df["Projek Name"].isna(), "Client"])
+            - set(project_df.loc[project_df["Projek Name"].notna(), "Client"])
+        )
+        for client in blank_projek_clients:
+            pdf = project_df[project_df["Client"] == client]
+            start_min = pdf["Actual Start Date"].min()
+            end_max = pdf["Actual End Date"].max()
+            if pd.isna(start_min) and pd.isna(end_max):
+                continue
+            actual_span_by_client_fallback[client] = {
+                "Actual Start Date": "" if pd.isna(start_min) else start_min.strftime("%d/%m/%Y"),
+                "Actual End Date": "" if pd.isna(end_max) else end_max.strftime("%d/%m/%Y"),
+            }
 
     total = len(df)
     unique_clients = df["Client"].nunique() if "Client" in df.columns else 0
@@ -449,7 +1180,7 @@ def build_overall_client_charts(df):
             )
             charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    display_cols = ["Client", "Projek ID", "Projek Name", "Projek Status", "Start Date", "End Date"]
+    display_cols = ["Client", "Projek ID", "Projek Name", "Projek Status", "Start Date", "End Date", "Technology"]
     avail = [c for c in display_cols if c in df.columns]
     meta_cols = [c for c in ["_row_idx", "Source File"] if c in df.columns]
     detail = df[avail + meta_cols].copy()
@@ -458,6 +1189,41 @@ def build_overall_client_charts(df):
             detail[c] = detail[c].dt.strftime("%d/%m/%Y")
     detail = detail.fillna("")
     charts["detail_data"] = detail.to_dict("records")
+
+    def section_rows(sdf, status):
+        # Actual Start/End Date only makes sense for Development -- a
+        # Warranty/Maintenance row is ongoing support work, not a project
+        # with a start/end to report on, so those sections don't get the
+        # columns at all (not just blank cells).
+        if status == "Development" and show_actual_span_cols:
+            sdf = sdf.copy()
+            end_date_pos = sdf.columns.get_loc("End Date") + 1 if "End Date" in sdf.columns else len(sdf.columns)
+            sdf.insert(end_date_pos, "Actual Start Date", "")
+            sdf.insert(end_date_pos + 1, "Actual End Date", "")
+            # A client-only fallback is only safe when there's nothing to
+            # disambiguate -- i.e. this client has exactly one Development
+            # row on the Home page. A client with two (e.g. MARA) keeps
+            # relying on the exact (Client, Projek Name) match only.
+            client_dev_counts = sdf["Client"].value_counts().to_dict()
+            for i, row in sdf.iterrows():
+                client = row.get("Client")
+                span = actual_span_by_project.get((client, row.get("Projek Name")))
+                if not span and client_dev_counts.get(client) == 1:
+                    span = actual_span_by_client_fallback.get(client)
+                if span:
+                    sdf.loc[i, "Actual Start Date"] = span["Actual Start Date"]
+                    sdf.loc[i, "Actual End Date"] = span["Actual End Date"]
+
+        rows = sdf.to_dict("records")
+        if status in ("Maintenance", "Warranty"):
+            stats_source = warranty_ticket_stats_by_company if status == "Warranty" else ticket_stats_by_client
+            for row in rows:
+                client = row.get("Client")
+                lookup_client = CLIENT_DISPLAY_ALIASES.get(client, client)
+                stats = stats_source.get(lookup_client, {"Pending": 0, "In Progress": 0, "Total Tickets": 0})
+                row.update(stats)
+            rows.sort(key=lambda r: r["Pending"] + r["In Progress"], reverse=True)
+        return rows
 
     charts["status_sections"] = {}
     if "Projek Status" in detail.columns:
@@ -470,7 +1236,7 @@ def build_overall_client_charts(df):
                     continue
                 charts["status_sections"][status] = {
                     "count": int(len(sdf)),
-                    "rows": sdf.to_dict("records"),
+                    "rows": section_rows(sdf, status),
                 }
         for status in sorted(set(statuses) - set(status_order), key=lambda s: str(s).lower()):
             sdf = detail[detail["Projek Status"] == status]
@@ -478,7 +1244,7 @@ def build_overall_client_charts(df):
                 continue
             charts["status_sections"][status] = {
                 "count": int(len(sdf)),
-                "rows": sdf.to_dict("records"),
+                "rows": section_rows(sdf, status),
             }
 
     return charts
@@ -926,6 +1692,10 @@ def build_tab_context(idx, filters, filter_options, df=None):
         # a Warranty-appropriate dataframe instead, scoped by Company.
         warranty_client = filters["clients"][0] if (single_client_mode and client_category == "Warranty") else None
         if warranty_client:
+            # A Home page client name (e.g. UNISIRAJ) can differ from the
+            # name its own ticket data uses (KUIPS) -- see
+            # CLIENT_DISPLAY_ALIASES.
+            warranty_client = CLIENT_DISPLAY_ALIASES.get(warranty_client, warranty_client)
             try:
                 warranty_df, _ = load_data({"clients": ["Client Warranty"], "priorities": [], "statuses": [], "task_types": [], "search": None})
             except Exception as e:
@@ -946,23 +1716,10 @@ def build_tab_context(idx, filters, filter_options, df=None):
         except Exception as e:
             log(f"DB error loading projects: {e}", "ERROR")
             project_df = pd.DataFrame()
-        # The projects table is independent of the tickets table (no shared
-        # filter query), so a client selected via the sidebar/Overall Client
-        # table has to be applied here explicitly to scope the Project tab
-        # to that client.
-        if filters["clients"] and "Client" in project_df.columns:
-            project_df = project_df[project_df["Client"].isin(filters["clients"])]
-        # Unlike tickets (no real Projek Name field, only a best-effort
-        # guess against Project), projects rows carry Projek Name directly,
-        # so this is an exact match -- still falls back to the unnarrowed
-        # set if it matches nothing, same safety rule as the ticket side.
-        projek_name = filters.get("projek_name")
-        if projek_name and "Projek Name" in project_df.columns and not project_df.empty:
-            narrowed = project_df[project_df["Projek Name"] == projek_name]
-            if not narrowed.empty:
-                project_df = narrowed
+        project_df = resolve_project_scope(project_df, filters)
         project_df = recompute_status_from_percentage(project_df)
         project_df = recompute_overall_progress(project_df)
+        project_df = recompute_duration(project_df)
         has_project = not project_df.empty
         project_charts = build_project_charts(project_df) if has_project else {}
         return "tabs/tab_3.html", {**common, "has_project": has_project, "project_charts": project_charts}
@@ -1046,7 +1803,18 @@ def build_tab_context(idx, filters, filter_options, df=None):
             log(f"DB error loading clients: {e}", "ERROR")
             client_df = pd.DataFrame()
         has_client = not client_df.empty
-        overall_client_charts = build_overall_client_charts(client_df) if has_client else {}
+        tickets_df = pd.DataFrame()
+        project_df = pd.DataFrame()
+        if has_client:
+            try:
+                tickets_df, _ = load_data({})
+            except Exception as e:
+                log(f"DB error loading tickets for Home totals: {e}", "ERROR")
+            try:
+                project_df = load_project_data()
+            except Exception as e:
+                log(f"DB error loading projects for Home actual dates: {e}", "ERROR")
+        overall_client_charts = build_overall_client_charts(client_df, tickets_df, project_df) if has_client else {}
         return "tabs/tab_9.html", {**common, "has_client": has_client, "overall_client_charts": overall_client_charts}
 
     if idx == 10:
@@ -1127,8 +1895,67 @@ def api_tab(idx):
         return f"<div class='tab-loading'>Failed to load: {e}</div>", 500
 
 
+@app.route("/api/project_report_data")
+def api_project_report_data():
+    """Feeds the client-side PDF report (pdfmake, built in dashboard.html)
+    -- generation happens entirely in the browser, this just hands back
+    the one project's data as JSON, scoped the same way the Project tab
+    itself is (see resolve_project_scope)."""
+    ensure_schema()
+    client = request.args.get("client") or ""
+    projek_name = request.args.get("projek_name") or None
+    if not client:
+        return jsonify({"success": False, "error": "client is required"}), 400
+    try:
+        data = build_project_report_data(client, projek_name)
+    except Exception as e:
+        log(f"Project report data error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if data is None:
+        label = f"{client} / {projek_name}" if projek_name else client
+        return jsonify({"success": False, "error": f"No project data found for {label}"}), 404
+    return jsonify({"success": True, "data": data})
+
+
+@app.route("/api/ticket_report_data")
+def api_ticket_report_data():
+    """Feeds the client-side PDF/PPTX report (pdfmake/pptxgenjs, see
+    dashboard.html) for a client's Warranty or Maintenance tickets --
+    generation happens entirely in the browser, this just hands back the
+    JSON, scoped the same way tab_2/tab_7 themselves are."""
+    ensure_schema()
+    client = request.args.get("client") or ""
+    category = request.args.get("category") or ""
+    if not client or category not in ("Warranty", "Maintenance"):
+        return jsonify({"success": False, "error": "client and category (Warranty or Maintenance) are required"}), 400
+    try:
+        data = build_ticket_report_data(client, category)
+    except Exception as e:
+        log(f"Ticket report data error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if data is None:
+        return jsonify({"success": False, "error": f"No {category} data found for {client}"}), 404
+    return jsonify({"success": True, "data": data})
+
+
 def require_admin():
     return session.get("role") == "admin"
+
+
+def require_cron_or_admin():
+    """Admin session (manual "Sync now" button) OR Vercel Cron's own auth.
+
+    Vercel Cron calls the endpoint with no session cookie, but -- as long
+    as the CRON_SECRET env var is set on the project -- automatically adds
+    `Authorization: Bearer <CRON_SECRET>` to the request, so that's what
+    authenticates the scheduled path instead.
+    """
+    if require_admin():
+        return True
+    secret = os.environ.get("CRON_SECRET")
+    if not secret:
+        return False
+    return request.headers.get("Authorization") == f"Bearer {secret}"
 
 
 @app.route("/api/login", methods=["POST"])
@@ -1220,6 +2047,14 @@ def api_upload():
         conn = request_conn()
         try:
             ins_p, upd_p = db.upsert_projects(parsed_p, conn=conn)
+            # A brand-new task row (e.g. this module gained tasks since the
+            # last upload) lands with no sort_order of its own, which would
+            # otherwise put it at the very end of the whole table instead
+            # of next to the rest of its module -- see
+            # renumber_projects_sort_order()'s docstring for why that
+            # splits a module into two separate-looking groups on the
+            # Project Details page.
+            db.renumber_projects_sort_order(conn=conn)
             conn.commit()
             summary["projects_inserted"] += ins_p
             summary["projects_updated"] += upd_p
@@ -1320,6 +2155,69 @@ def api_restart():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/sync_mysupport", methods=["GET", "POST"])
+def api_sync_mysupport():
+    """Pull tickets/projects/clients from the live mysupport MySQL DB and
+    merge them into Postgres. Only overwrites the columns mysupport has
+    data for (see mysupport_sync.*_SYNC_COLUMNS) -- Priority, SLA fields,
+    Progress %, planned/actual dates, Assigned To, etc. are left exactly
+    as they are, since mysupport has no equivalent for those.
+
+    Triggered either by the "Sync from mysupport" button (admin session)
+    or by the Vercel Cron schedule (see vercel.json), which is why this
+    accepts GET too and checks require_cron_or_admin() instead of just
+    require_admin().
+    """
+    if not require_cron_or_admin():
+        return jsonify({"success": False, "error": "Admin login or cron secret required"}), 403
+    ensure_schema()
+
+    summary = {"tickets_inserted": 0, "tickets_updated": 0,
+               "projects_inserted": 0, "projects_updated": 0,
+               "clients_inserted": 0, "clients_updated": 0, "errors": []}
+
+    try:
+        mysupport_conn = mysupport_sync.get_mysupport_conn()
+    except Exception as e:
+        log(f"mysupport sync: connection failed: {e}", "ERROR")
+        return jsonify({"success": False, "error": f"Could not connect to mysupport: {e}"}), 502
+
+    try:
+        try:
+            tickets_df = mysupport_sync.fetch_mysupport_tickets_df(conn=mysupport_conn)
+            ins, upd = db.upsert_tickets(
+                tickets_df, conn=request_conn(), sync_columns=mysupport_sync.TICKET_SYNC_COLUMNS,
+            )
+            request_conn().commit()
+            summary["tickets_inserted"] += ins
+            summary["tickets_updated"] += upd
+        except Exception as e:
+            request_conn().rollback()
+            log(f"mysupport sync: tickets failed: {e}", "ERROR")
+            summary["errors"].append(f"tickets: {str(e)[:300]}")
+
+        # NOTE: syncing into Postgres `projects` is intentionally disabled --
+        # see the comment on mysupport_sync.fetch_mysupport_projects_df().
+        # Postgres `projects` holds one row per *module/task line* (title,
+        # description, plan/target/actual dates), which mysupport's
+        # `projects` table (one row per project, no dates/description) does
+        # not map onto without picking a source for those rows (tasks?
+        # progress?) that hasn't been decided yet.
+
+        # NOTE: syncing into Postgres `clients` is also intentionally
+        # disabled -- see the comment on mysupport_sync.fetch_mysupport_clients_df().
+        # It's a small, manually-curated set of Development/Warranty/
+        # Maintenance engagement rows per client, not a raw project catalog;
+        # this used to insert one row per mysupport project (15+ per client)
+        # and every one of them displayed that client's *entire* ticket
+        # total on the Home page, making totals look wildly inflated.
+    finally:
+        mysupport_conn.close()
+
+    summary["success"] = len(summary["errors"]) == 0
+    return jsonify(summary)
+
+
 @app.route("/api/status")
 def api_status():
     ensure_schema()
@@ -1398,6 +2296,49 @@ def api_add_row():
         return jsonify({"success": True, "row_idx": new_id})
     except ValueError as e:
         return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/reorder_rows", methods=["POST"])
+def api_reorder_rows():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json()
+    table = data.get("table")
+    ids = data.get("ids") or []
+
+    if table != "projects":
+        return jsonify({"success": False, "error": f"Reordering not supported for: {table}"}), 400
+
+    try:
+        db.reorder_project_rows(ids, conn=request_conn())
+        return jsonify({"success": True})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/delete_row", methods=["POST"])
+def api_delete_row():
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json()
+    table = data.get("table")
+    row_idx = data.get("row_idx")
+
+    delete_fn = {
+        "projects": db.delete_project_row,
+        "tickets": db.delete_ticket_row,
+        "clients": db.delete_client_row,
+    }.get(table)
+    if not delete_fn:
+        return jsonify({"success": False, "error": f"Unknown table: {table}"}), 400
+
+    try:
+        deleted = delete_fn(int(row_idx), conn=request_conn())
+        return jsonify({"success": True, "deleted": deleted})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
