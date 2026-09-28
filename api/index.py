@@ -109,6 +109,7 @@ pio.templates["plotly_white"].layout.hoverlabel = dict(
 TICKET_DB_COL_BY_DISPLAY = {display: col for display, col in db.TICKET_DB_COLUMNS}
 CLIENT_DB_COL_BY_DISPLAY = {display: col for display, col in db.CLIENT_DB_COLUMNS}
 PROJECT_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_DB_COLUMNS}
+MILESTONE_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_MILESTONE_DB_COLUMNS}
 
 _schema_ready = False
 
@@ -210,6 +211,11 @@ def load_project_data():
 def load_client_data():
     ensure_schema()
     return db.fetch_clients_df(conn=request_conn())
+
+
+def load_milestone_data():
+    ensure_schema()
+    return db.fetch_project_milestone_df(conn=request_conn())
 
 
 def build_warranty_charts(df):
@@ -1180,7 +1186,7 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
             )
             charts["status_pie"] = fig.to_html(full_html=False, include_plotlyjs=False, config={"displayModeBar": False})
 
-    display_cols = ["Client", "Projek ID", "Projek Name", "Projek Status", "Start Date", "End Date", "Technology"]
+    display_cols = ["Client", "Projek ID", "Projek Name", "Projek Status", "Progress Status", "Start Date", "End Date", "Technology"]
     avail = [c for c in display_cols if c in df.columns]
     meta_cols = [c for c in ["_row_idx", "Source File"] if c in df.columns]
     detail = df[avail + meta_cols].copy()
@@ -1214,6 +1220,11 @@ def build_overall_client_charts(df, tickets_df=None, project_df=None):
                     sdf.loc[i, "Actual Start Date"] = span["Actual Start Date"]
                     sdf.loc[i, "Actual End Date"] = span["Actual End Date"]
 
+        # Progress Status is a Development-only field (typed on this very
+        # page) -- the other sections don't carry the column at all, the
+        # same way Actual Start/End Date above are Development-only.
+        if status != "Development" and "Progress Status" in sdf.columns:
+            sdf = sdf.drop(columns=["Progress Status"])
         rows = sdf.to_dict("records")
         if status in ("Maintenance", "Warranty"):
             stats_source = warranty_ticket_stats_by_company if status == "Warranty" else ticket_stats_by_client
@@ -1761,15 +1772,123 @@ def build_tab_context(idx, filters, filter_options, df=None):
         meta_cols = ["_row_idx", "Source File"]
         detail_cols = avail_cols + [c for c in meta_cols if c in df.columns]
         detail_df = df[detail_cols].copy() if filtered_has_data and detail_cols else pd.DataFrame()
+
+        # Contract period per Maintenance client (from the same clients
+        # table the Home page renders), used to sort every ticket into
+        # the tab's two groups: "Current Contract" (creation date on/after
+        # the contract's Start Date) and "Old Contract" (before it). A
+        # client with several Maintenance contracts matches each ticket
+        # to a contract by its Project name; tickets that don't match any
+        # project fall back to the client's earliest contract start.
+        contracts = {}
+        try:
+            clients_df = db.fetch_clients_df(conn=request_conn())
+        except Exception as e:
+            log(f"DB error loading clients for contract split: {e}", "ERROR")
+            clients_df = pd.DataFrame()
+        if (
+            not clients_df.empty
+            and {"Client", "Projek Status", "Projek Name", "Start Date", "End Date"}.issubset(clients_df.columns)
+        ):
+            maint_rows = clients_df[
+                (clients_df["Projek Status"] == "Maintenance") & clients_df["Start Date"].notna()
+            ]
+            for client, group in maint_rows.groupby("Client"):
+                contracts[client] = [
+                    (p, s, e)
+                    for p, s, e in zip(group["Projek Name"], group["Start Date"], group["End Date"])
+                    if p
+                ]
+
+        def contract_period_for(project, client):
+            """(start, end) for the client's contract matching `project`'s
+            name, or the combined earliest-start/latest-end span as a
+            fallback, or (None, None) when the client has no contract."""
+            rows = contracts.get(client)
+            if not rows:
+                return None, None
+            project_l = (project or "").strip().lower()
+            for projek_name, start, end in rows:
+                name_l = (projek_name or "").strip().lower()
+                if project_l and (project_l in name_l or name_l in project_l):
+                    return start, end
+            return min(s for _, s, _ in rows), max((e for _, _, e in rows if e is not None), default=None)
+
+        # A maintenance row with a blank Projek Name can't be matched
+        # against any ticket's Project -- drop it rather than hand the
+        # template a split with no dates to show.
+        contracts = {client: rows for client, rows in contracts.items() if rows}
+
+        # The tab renders as two top-level groups -- Current Contract and
+        # Old Contract -- each holding one table per client. A ticket is
+        # Old when its creation date precedes the contract's Start Date;
+        # on/after it (even past the End Date) is Current. Clients with no
+        # Maintenance contract can't be classified, so all their tickets
+        # sit under Current Contract without any contract dates shown.
+        created_col = "Ticket Created Date" if "Ticket Created Date" in detail_df.columns else None
+        groups = {"current": [], "old": []}
+        by_client = {}
+        for rec in detail_df.to_dict("records"):
+            client = rec.get("Client", "Unknown")
+            start, end = contract_period_for(rec.get("Project"), client)
+            if start is None:
+                group = "current"
+            else:
+                created = rec.get(created_col) if created_col else None
+                is_old = created is not None and not pd.isna(created) and created < start
+                group = "old" if is_old else "current"
+            key = (group, client)
+            entry = by_client.get(key)
+            if entry is None:
+                entry = {"client": client, "rows": [], "starts": [], "ends": []}
+                by_client[key] = entry
+                groups[group].append(entry)
+            entry["rows"].append(rec)
+            if start is not None:
+                entry["starts"].append(start)
+                if end is not None:
+                    entry["ends"].append(end)
+
+        for entry in by_client.values():
+            entry["contract_start"] = min(entry["starts"]) if entry["starts"] else None
+            entry["contract_end"] = max(entry["ends"]) if entry["ends"] else None
+            del entry["starts"], entry["ends"]
+
         for col in ("Ticket Created Date", "Ticket Completed Date", "Ticket Closed Date"):
-            if col in detail_df.columns:
-                detail_df[col] = detail_df[col].dt.strftime("%d/%m/%Y")
-        detail_data = detail_df.to_dict("records") if filtered_has_data and not detail_df.empty else []
-        detail_by_client = {}
-        for row in detail_data:
-            client = row.get("Client", "Unknown")
-            detail_by_client.setdefault(client, []).append(row)
-        return "tabs/tab_7.html", {**common, "detail_by_client": detail_by_client, "data_info": {"total_filtered": len(df)}}
+            for group_rows in groups.values():
+                for entry in group_rows:
+                    for rec in entry["rows"]:
+                        val = rec.get(col)
+                        if pd.isna(val):
+                            rec[col] = "NaT"
+                        else:
+                            rec[col] = pd.Timestamp(val).strftime("%d/%m/%Y")
+        for entry in by_client.values():
+            for key in ("contract_start", "contract_end"):
+                if entry[key] is not None:
+                    entry[key] = pd.Timestamp(entry[key]).strftime("%d/%m/%Y")
+        detail_groups = {
+            "current": groups["current"],
+            "old": groups["old"],
+            "current_total": sum(len(e["rows"]) for e in groups["current"]),
+            "old_total": sum(len(e["rows"]) for e in groups["old"]),
+        }
+        # Status roll-up shown next to each group's heading. The four
+        # statuses the user expects always appear (even at 0); anything
+        # else in the data (e.g. Deleted) is appended. "In Progress" is
+        # the rare alternate spelling of "Inprogress" -- merged so it
+        # doesn't show up as its own chip.
+        for group_key in ("current", "old"):
+            counts = {}
+            for entry in groups[group_key]:
+                for rec in entry["rows"]:
+                    raw = (rec.get("Ticket Status") or "").strip() or "Unknown"
+                    status = "Inprogress" if raw.lower() in ("inprogress", "in progress") else raw
+                    counts[status] = counts.get(status, 0) + 1
+            ordered = [(s, counts.pop(s, 0)) for s in ("Pending", "Inprogress", "Completed", "Closed")]
+            ordered.extend(sorted(counts.items()))
+            detail_groups[group_key + "_status"] = ordered
+        return "tabs/tab_7.html", {**common, "detail_groups": detail_groups, "data_info": {"total_filtered": len(df)}}
 
     if idx == 8:
         if df is None:
@@ -1797,6 +1916,23 @@ def build_tab_context(idx, filters, filter_options, df=None):
         return "tabs/tab_8.html", {**common, "ageing_list_data": ageing_list_data}
 
     if idx == 9:
+        # Make sure transfer_history (part of SCHEMA_SQL) exists before the
+        # auto-transfer below queries it -- load_client_data() would
+        # otherwise be the first thing to create the schema.
+        ensure_schema()
+        # A Development row whose Progress Status is "Completed" and whose
+        # End Date has passed is finished work that now belongs under
+        # Warranty, so the move happens here, before the data is read --
+        # one page load is all it takes and no button press is needed.
+        # Never let a failed write take the Home page down with it: the
+        # rows simply stay in Development until the next load.
+        try:
+            moved = db.auto_transfer_development_rows(conn=request_conn())
+            if moved:
+                names = ", ".join(f"{r['client']}/{r['projek_name'] or r['projek_id']}" for r in moved)
+                log(f"Auto-transferred {len(moved)} completed Development row(s) to Warranty: {names}")
+        except Exception as e:
+            log(f"Auto-transfer to Warranty failed: {e}", "ERROR")
         try:
             client_df = load_client_data()
         except Exception as e:
@@ -1815,10 +1951,50 @@ def build_tab_context(idx, filters, filter_options, df=None):
             except Exception as e:
                 log(f"DB error loading projects for Home actual dates: {e}", "ERROR")
         overall_client_charts = build_overall_client_charts(client_df, tickets_df, project_df) if has_client else {}
-        return "tabs/tab_9.html", {**common, "has_client": has_client, "overall_client_charts": overall_client_charts}
+        try:
+            transfer_history = db.fetch_transfer_history(conn=request_conn())
+        except Exception as e:
+            log(f"DB error loading transfer history: {e}", "ERROR")
+            transfer_history = []
+        return "tabs/tab_9.html", {**common, "has_client": has_client, "overall_client_charts": overall_client_charts, "transfer_history": transfer_history}
 
     if idx == 10:
         return "tabs/tab_10.html", common
+
+    if idx == 11:
+        cols = [c for c, _ in db.PROJECT_MILESTONE_DB_COLUMNS]
+        try:
+            milestone_df = load_milestone_data()
+        except Exception as e:
+            log(f"DB error loading milestones: {e}", "ERROR")
+            milestone_df = pd.DataFrame()
+        if milestone_df.empty:
+            milestone_df = pd.DataFrame(columns=["_row_idx"] + cols)
+        # Same narrowing as every other tab: the ?client=... / ?projek_name=...
+        # in the URL (set when a Home row is clicked) scopes this table too,
+        # so a single-client view doesn't list every other client's tasks.
+        if filters["clients"]:
+            milestone_df = milestone_df[milestone_df["Client"].isin(filters["clients"])]
+        if filters.get("projek_name"):
+            milestone_df = milestone_df[
+                milestone_df["Projectname"].fillna("").str.contains(
+                    filters["projek_name"], case=False, regex=False
+                )
+            ]
+
+        detail = milestone_df[["_row_idx"] + [c for c in cols if c in milestone_df.columns]].copy()
+        for c in ("Startdate", "Enddate"):
+            if c in detail.columns and not detail[c].isna().all():
+                detail[c] = detail[c].dt.strftime("%d/%m/%Y")
+        detail = detail.fillna("")
+        return (
+            "tabs/tab_11.html",
+            {
+                **common,
+                "milestone_cols": [c for c in cols if c in detail.columns],
+                "milestone_rows": detail.to_dict("records"),
+            },
+        )
 
     raise ValueError(f"Unknown tab index: {idx}")
 
@@ -1884,7 +2060,7 @@ def index():
 
 @app.route("/api/tab/<int:idx>")
 def api_tab(idx):
-    if idx < 0 or idx > 10:
+    if idx < 0 or idx > 11:
         return "Not found", 404
     filters = parse_filters(request.args)
     filter_options = build_filter_options(filters)
@@ -2007,7 +2183,7 @@ def api_upload():
     summary = {"files": [], "tickets_inserted": 0, "tickets_updated": 0,
                "projects_inserted": 0, "projects_updated": 0,
                "clients_inserted": 0, "clients_updated": 0, "errors": [],
-               "rows_dropped": 0, "unmapped_columns": []}
+               "rows_dropped": 0, "unmapped_columns": [], "notes": []}
     seen_unmapped = set()
 
     def note_diagnostics(diag):
@@ -2067,9 +2243,17 @@ def api_upload():
         conn = request_conn()
         try:
             ins_c, upd_c = db.upsert_clients(parsed_c, conn=conn)
+            # The source Client sheet always says "Development" for rows it
+            # knows about, so this upsert can drag an already-transferred
+            # row back out of Warranty. Push it straight back.
+            reasserted = db.reassert_active_transfers(conn=conn)
             conn.commit()
             summary["clients_inserted"] += ins_c
             summary["clients_updated"] += upd_c
+            if reasserted:
+                summary["notes"].append(
+                    f"{label}: {reasserted} row(s) kept in Warranty from a previous automatic transfer"
+                )
         except Exception as e:
             conn.rollback()
             log(f"Upload error on {label}: {e}", "ERROR")
@@ -2247,6 +2431,16 @@ def api_save():
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    if sheet == "Milestone":
+        db_column = MILESTONE_DB_COL_BY_DISPLAY.get(column)
+        if not db_column:
+            return {"success": False, "error": f"Column not editable: {column}"}
+        try:
+            db.update_project_milestone_field(int(row_idx), db_column, value, conn=request_conn())
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     if sheet == "Client Project":
         db_column = PROJECT_DB_COL_BY_DISPLAY.get(column)
         if not db_column:
@@ -2280,6 +2474,7 @@ def api_add_row():
         "clients": (CLIENT_DB_COL_BY_DISPLAY, db.insert_client_row),
         "projects": (PROJECT_DB_COL_BY_DISPLAY, db.insert_project_row),
         "tickets": (TICKET_DB_COL_BY_DISPLAY, db.insert_ticket_row),
+        "milestones": (MILESTONE_DB_COL_BY_DISPLAY, db.insert_project_milestone_row),
     }.get(table, (None, None))
     if not insert_fn:
         return jsonify({"success": False, "error": f"Unknown table: {table}"}), 400
@@ -2332,6 +2527,7 @@ def api_delete_row():
         "projects": db.delete_project_row,
         "tickets": db.delete_ticket_row,
         "clients": db.delete_client_row,
+        "milestones": db.delete_project_milestone_row,
     }.get(table)
     if not delete_fn:
         return jsonify({"success": False, "error": f"Unknown table: {table}"}), 400
@@ -2341,6 +2537,44 @@ def api_delete_row():
         return jsonify({"success": True, "deleted": deleted})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route("/api/revert_transfer", methods=["POST"])
+def api_revert_transfer():
+    """Undo an automatic Development -> Warranty transfer from the Home panel."""
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json() or {}
+    history_id = data.get("history_id")
+    try:
+        result = db.revert_transfer(int(history_id), conn=request_conn())
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Missing or invalid history_id"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    if not result["success"]:
+        return jsonify(result), 404
+    log(f"Reverted transfer #{history_id} (row restored: {result['row_restored']})")
+    return jsonify(result)
+
+
+@app.route("/api/dismiss_transfer", methods=["POST"])
+def api_dismiss_transfer():
+    """Proceed on a Home panel transfer: keep it, stop listing it."""
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json() or {}
+    history_id = data.get("history_id")
+    try:
+        result = db.dismiss_transfer(int(history_id), conn=request_conn())
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Missing or invalid history_id"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    if not result["success"]:
+        return jsonify(result), 404
+    log(f"Dismissed transfer #{history_id}")
+    return jsonify(result)
 
 
 if __name__ == "__main__":

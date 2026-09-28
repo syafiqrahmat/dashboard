@@ -281,6 +281,26 @@ body::after{
 }
 .end-date-badge.due-soon{background:#f5c518;color:#5c4600}
 .end-date-badge.overdue{background:#e0392c;color:#fff}
+.end-date-badge.active{background:#0e9f6e;color:#fff}
+/* ---------- Contract group switcher (Ticket Details tab) ---------- */
+.contract-group-tabs{display:flex;gap:6px;margin:12px 0 4px}
+.contract-group-btn{border:1px solid var(--border);background:#fff;color:var(--text);
+  border-radius:8px;padding:7px 16px;font-weight:600;font-size:0.82rem;cursor:pointer}
+.contract-group-btn:hover{border-color:var(--accent);color:var(--accent)}
+.contract-group-btn.active{background:var(--gradient);color:#fff;border-color:transparent;
+  box-shadow:0 2px 8px rgba(44,95,130,0.3)}
+.contract-group{display:none}
+.contract-group.active{display:block}
+.contract-group h3{margin:16px 0 4px}
+/* Status roll-up chips in each contract group's heading */
+.status-count{display:inline-block;margin:0 0 0 8px;padding:2px 10px;border-radius:12px;
+  font-size:0.7rem;font-weight:700;letter-spacing:0.2px;vertical-align:middle;
+  box-shadow:0 1px 2px rgba(0,0,0,0.12)}
+.status-count.pending{background:#fdf3d7;color:#8a6100}
+.status-count.inprogress{background:#e2ecf5;color:#1d4f75}
+.status-count.completed{background:#dff5ec;color:#0b7a56}
+.status-count.closed{background:#e8ecf1;color:#3f4c5a}
+.status-count.other{background:#fde8e6;color:#a1241a}
 .derived-cell{color:var(--text-dim);background:rgba(0,0,0,0.03);cursor:not-allowed}
 .tab-loading{padding:60px 20px;text-align:center;color:var(--text-dim);font-size:0.95rem}
 tr[data-new-row="true"]{background:rgba(44,95,130,0.05)}
@@ -535,6 +555,36 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 /* ---------- Role gate ---------- */
 .admin-only{display:none !important}
 body.role-admin .admin-only{display:inline-flex !important}
+/* Home page's transfer-history panel is a block, not a control, so it
+   needs its own display rule -- the inline-flex rule above would make the
+   whole panel shrink-wrap into one line. */
+.transfer-history.admin-only{display:none !important}
+body.role-admin .transfer-history.admin-only{display:block !important}
+/* Revert -> Confirm/Cancel is an inline two-step confirm: Revert only
+   reveals the question, Confirm is what actually posts the request. */
+.transfer-history .btn-revert-transfer,
+.transfer-history .btn-proceed-transfer,
+.transfer-history .btn-confirm-transfer,
+.transfer-history .btn-cancel-transfer{
+  padding:4px 12px;color:#fff;border:none;border-radius:6px;
+  font-weight:600;font-size:0.78rem;cursor:pointer;white-space:nowrap;
+}
+.transfer-history .btn-revert-transfer{background:#8e44ad}
+.transfer-history .btn-revert-transfer:hover{background:#7d3c98}
+.transfer-history .btn-proceed-transfer{background:#27ae60}
+.transfer-history .btn-proceed-transfer:hover{background:#219653}
+.transfer-history .btn-confirm-transfer{background:#3498db}
+/* The confirm step inherits the colour of the action it is confirming --
+   red for the undo, green for keeping the transfer. */
+.transfer-history .btn-confirm-transfer.is-revert{background:#c0392b}
+.transfer-history .btn-confirm-transfer.is-revert:hover{background:#a93226}
+.transfer-history .btn-confirm-transfer.is-proceed{background:#27ae60}
+.transfer-history .btn-confirm-transfer.is-proceed:hover{background:#219653}
+.transfer-history .btn-confirm-transfer:hover{background:#2980b9}
+.transfer-history .btn-cancel-transfer{background:#7f8c8d}
+.transfer-history .btn-cancel-transfer:hover{background:#6c7a7b}
+.transfer-history button:disabled{opacity:.5;cursor:default}
+.transfer-history .transfer-actions{display:flex;gap:6px;align-items:center;justify-content:flex-end}
 .viewer-only-note{display:block;color:var(--text-dim);font-size:0.82rem;margin-top:10px}
 body.role-admin .viewer-only-note{display:none}
 .role-modal-overlay{
@@ -634,6 +684,7 @@ body.role-admin .viewer-only-note{display:none}
     <nav class="sidebar-list">
       {% if client_category == 'Development' %}
       <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(3, this)">Project</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
       {% elif client_category == 'Warranty' %}
       <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(2, this)">Warranty</button>
       {% else %}
@@ -641,6 +692,7 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(4, this)">Ageing Analysis</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(5, this)">Ticket Analysis</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(8, this)">Ageing List</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
       {% endif %}
     </nav>
     {% else %}
@@ -651,6 +703,7 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(1, this)">Maintenance</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(2, this)">Warranty</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(3, this)">Project</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(5, this)">Ticket Analysis</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(7, this)">Ticket Details</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(4, this)">Ageing Analysis</button>
@@ -803,6 +856,10 @@ body.role-admin .viewer-only-note{display:none}
 
 <div class="tab-pane{{ ' active' if default_tab_idx == 10 else '' }}" id="tab-10" data-loaded="{{ 'true' if default_tab_idx == 10 else 'false' }}">
   {% if default_tab_idx == 10 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
+</div>
+
+<div class="tab-pane{{ ' active' if default_tab_idx == 11 else '' }}" id="tab-11" data-loaded="{{ 'true' if default_tab_idx == 11 else 'false' }}">
+  {% if default_tab_idx == 11 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
 {% endif %}
@@ -1074,12 +1131,25 @@ function applyEndDateBadges() {
       badge.className = 'end-date-badge due-soon';
       badge.textContent = 'Due Soon';
     } else {
-      return;
+      badge.className = 'end-date-badge active';
+      badge.textContent = 'Active';
     }
     cell.appendChild(badge);
   });
 }
 document.addEventListener('DOMContentLoaded', applyEndDateBadges);
+
+/* Ticket Details tab: toggle between the "Current Contract" and
+   "Old Contract" groups. Both stay in the DOM (so inline editing can
+   reach every row); only visibility changes. */
+function switchContractGroup(group, btn) {
+  document.querySelectorAll('.contract-group').forEach(function(g) {
+    g.classList.toggle('active', g.id === 'contract-group-' + group);
+  });
+  document.querySelectorAll('.contract-group-btn').forEach(function(b) {
+    b.classList.toggle('active', b === btn);
+  });
+}
 
 function selectClient(name, category, projekName) {
   // Entering (or leaving) a client's page always drops any leftover
@@ -1130,6 +1200,103 @@ function postDeleteRow(dbTable, rowIdx) {
     body: JSON.stringify({table: dbTable, row_idx: rowIdx})
   }).then(function(r) { return r.json(); });
 }
+/* Home page: undo an automatic Development -> Warranty transfer. The
+   server restores Projek Status/Progress Status only if the row still sits
+   in Warranty, so a row that was manually moved on since just has its
+   history entry closed -- the toast says so either way. */
+function postRevertTransfer(historyId) {
+  return fetch('/api/revert_transfer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({history_id: historyId})
+  }).then(function(r) { return r.json(); });
+}
+/* Proceed: keep the transfer, just drop the row off the panel. */
+function postDismissTransfer(historyId) {
+  return fetch('/api/dismiss_transfer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({history_id: historyId})
+  }).then(function(r) { return r.json(); });
+}
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest(
+    '.btn-revert-transfer, .btn-proceed-transfer, .btn-confirm-transfer, .btn-cancel-transfer'
+  );
+  if (!btn) return;
+  var cell = btn.closest('.transfer-actions');
+  if (!cell) return;
+  var revertBtn = cell.querySelector('.btn-revert-transfer');
+  var proceedBtn = cell.querySelector('.btn-proceed-transfer');
+  var confirmBtn = cell.querySelector('.btn-confirm-transfer');
+  var cancelBtn = cell.querySelector('.btn-cancel-transfer');
+  if (!revertBtn || !proceedBtn || !confirmBtn || !cancelBtn) return;
+
+  function showPrimary() {
+    cell.removeAttribute('data-pending');
+    confirmBtn.hidden = true;
+    cancelBtn.hidden = true;
+    revertBtn.hidden = false;
+    proceedBtn.hidden = false;
+    revertBtn.disabled = false;
+    proceedBtn.disabled = false;
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+  }
+
+  /* Step 1: pick an action. Both primary buttons swap out for
+     Confirm/Cancel, and which one was pressed is remembered on the cell so
+     Confirm knows what it is confirming -- nothing is posted yet. */
+  if (btn.classList.contains('btn-revert-transfer') || btn.classList.contains('btn-proceed-transfer')) {
+    var action = btn.classList.contains('btn-revert-transfer') ? 'revert' : 'proceed';
+    cell.setAttribute('data-pending', action);
+    revertBtn.hidden = true;
+    proceedBtn.hidden = true;
+    confirmBtn.textContent = action === 'revert' ? 'Confirm Revert' : 'Confirm Proceed';
+    confirmBtn.classList.toggle('is-revert', action === 'revert');
+    confirmBtn.classList.toggle('is-proceed', action === 'proceed');
+    confirmBtn.hidden = false;
+    cancelBtn.hidden = false;
+    confirmBtn.focus();
+    return;
+  }
+
+  /* Back out of the question without touching the server. */
+  if (btn.classList.contains('btn-cancel-transfer')) {
+    showPrimary();
+    return;
+  }
+
+  /* Confirm: actually post the chosen action. */
+  var action = cell.getAttribute('data-pending');
+  var historyId = confirmBtn.getAttribute('data-history-id');
+  if (!action || !historyId) return;
+  confirmBtn.disabled = true;
+  cancelBtn.disabled = true;
+  revertBtn.disabled = true;
+  proceedBtn.disabled = true;
+
+  function failed(message) {
+    showPrimary();
+    showToast((action === 'revert' ? 'Revert failed: ' : 'Proceed failed: ') + message, 'error');
+  }
+
+  var request = action === 'revert' ? postRevertTransfer(historyId) : postDismissTransfer(historyId);
+  request.then(function(result) {
+    if (result.success) {
+      if (action === 'revert') {
+        showToast(result.row_restored ? 'Transfer reverted' : 'History cleared -- the row had been changed since the transfer', 'success');
+      } else {
+        showToast('Transfer kept and removed from the list', 'success');
+      }
+      setTimeout(function() { window.location.reload(); }, 700);
+    } else {
+      failed(result.error || 'unknown');
+    }
+  }).catch(function(err) {
+    failed(err.message);
+  });
+});
 document.addEventListener('click', function(e) {
   var btn = e.target.closest('.btn-row-action');
   if (!btn) return;
@@ -1445,6 +1612,7 @@ var DATE_COLUMNS = [
   'Start Date', 'End Date',
   'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
   'Actual Start Date', 'Actual End Date',
+  'Startdate', 'Enddate',
 ];
 function isDateColumn(col) {
   return DATE_COLUMNS.indexOf(col) !== -1;
@@ -1815,7 +1983,13 @@ var editTables = [
       {col: 'Overall Progress Task (%)', derived: true, placeholder: ''}
     ]
   }],
-  ['client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9']
+  ['client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9'],
+  ['milestone-table', 'saveBtn11', 'cancelBtn11', 'editBtn11', {
+    btnId: 'addRowBtn11', dbTable: 'milestones',
+    // Order/count must match tab_11.html's <thead> (PROJECT_MILESTONE_DB_COLUMNS
+    // in api/db.py) or a new row's cells would land under the wrong headers.
+    columns: ['Client', 'Projectname', 'Taskname', 'Duration', 'Startdate', 'Enddate', 'Progress']
+  }]
 ];
 
 /* Re-run after every lazy tab load, not just once at page-bottom parse
@@ -1834,7 +2008,7 @@ function wireEditTables() {
   if (document.getElementById('editBtn9')) {
     makeEditableMulti('client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9', 'tab-9', {
       btnId: 'addRowBtn9', dbTable: 'clients',
-      columns: ['Client', 'Projek ID', 'Projek Name', 'Projek Status', 'Start Date', 'End Date']
+      columns: ['Client', 'Projek ID', 'Projek Name', 'Projek Status', 'Progress Status', 'Start Date', 'End Date']
     });
   }
 
@@ -1860,6 +2034,9 @@ function cancelEdit3() { return false; }
 function toggleEdit9() { return false; }
 function saveChanges9() { return false; }
 function cancelEdit9() { return false; }
+function toggleEdit11() { return false; }
+function saveChanges11() { return false; }
+function cancelEdit11() { return false; }
 
 /* ---------- Project PDF report (client-side, pdfmake) ----------
    Generated entirely in the browser (no server-side PDF dependency, no
@@ -3847,6 +4024,9 @@ function doUpload() {
       }
       if (result.unmapped_columns && result.unmapped_columns.length) {
         html += '<div class="row-warn">&#9888; Column(s) not stored (no matching field): ' + escapeHtml(result.unmapped_columns.join(', ')) + '</div>';
+      }
+      if (result.notes && result.notes.length) {
+        result.notes.forEach(function(note) { html += '<div class="row-ok">&#10003; ' + escapeHtml(note) + '</div>'; });
       }
       if (result.errors && result.errors.length) {
         result.errors.forEach(function(err) { html += '<div class="row-err">&#10007; ' + escapeHtml(err) + '</div>'; });

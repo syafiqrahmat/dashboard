@@ -76,10 +76,24 @@ CLIENT_DB_COLUMNS = [
     ("Projek ID", "projek_id"),
     ("Projek Name", "projek_name"),
     ("Projek Status", "projek_status"),
+    ("Progress Status", "progress_status"),
     ("Start Date", "start_date"),
     ("End Date", "end_date"),
     ("Technology", "technology"),
     ("Source File", "source_file"),
+]
+
+# Display label -> column for the projectmilestone table. The labels are the
+# field names the table was specified with (Projectname, Startdate, ...);
+# the columns themselves stay snake_case like every other table here.
+PROJECT_MILESTONE_DB_COLUMNS = [
+    ("Client", "client"),
+    ("Projectname", "project_name"),
+    ("Taskname", "task_name"),
+    ("Duration", "duration"),
+    ("Startdate", "start_date"),
+    ("Enddate", "end_date"),
+    ("Progress", "progress"),
 ]
 
 SCHEMA_SQL = """
@@ -189,6 +203,10 @@ CREATE TABLE IF NOT EXISTS clients (
 -- Column added after the table already existed in production.
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS technology TEXT;
 
+-- Hand-entered on the Home page's Development table (it's a status people
+-- type, not something derived from the source Excel's Client sheet).
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS progress_status TEXT;
+
 -- The source "Client Project" sheet has many rows with a blank title
 -- and/or start/due date (sub-item description lines, section
 -- separators). A plain UNIQUE constraint can't dedupe those on
@@ -230,6 +248,70 @@ CREATE TABLE IF NOT EXISTS admin_users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Audit trail for the automatic Development -> Warranty transfer (a
+-- Development row whose Progress Status is "Completed" and whose End Date
+-- has passed). Stores enough of the old state to put the row back on
+-- revert, plus text snapshots so the log stays readable even after the
+-- client row itself is deleted. Deliberately no FK to clients: reset_all()
+-- TRUNCATEs clients, and truncating a table that a foreign key points at
+-- requires CASCADE (or truncating both together), which would silently
+-- start wiping this table too.
+CREATE TABLE IF NOT EXISTS transfer_history (
+    id SERIAL PRIMARY KEY,
+    client_row_id INTEGER NOT NULL,
+    client TEXT,
+    projek_id TEXT,
+    projek_name TEXT,
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    prev_progress_status TEXT,
+    transferred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reverted_at TIMESTAMPTZ,
+    -- Set by the Proceed button: the transfer stands, the admin just
+    -- doesn't want the row listed in the panel any more. Kept separate
+    -- from reverted_at because the two mean opposite things -- a dismissed
+    -- entry must keep re-asserting itself after an Excel upload (see
+    -- reassert_active_transfers), a reverted one must not.
+    dismissed_at TIMESTAMPTZ
+);
+
+-- Column added after the table already existed (same pattern as the other
+-- post-hoc ALTERs above -- init_schema runs SCHEMA_SQL on every startup).
+ALTER TABLE transfer_history ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;
+
+-- One *active* (not yet reverted) transfer per client row. This is what
+-- makes the auto-transfer idempotent: a re-upload can push a row back to
+-- Development, and the next Home load moves it again without writing a
+-- second history entry (the INSERT ... ON CONFLICT DO NOTHING below).
+-- Dismissed entries still count as active for the same reason: the move
+-- happened and must not be logged twice -- it's only hidden from the panel.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transfer_history_active
+    ON transfer_history(client_row_id) WHERE reverted_at IS NULL;
+
+-- Milestones/tasks per project (Client, Projectname, Taskname, Duration,
+-- Startdate, Enddate, Progress). Column names follow the snake_case style
+-- of the other tables -- the exact field names above live in
+-- PROJECT_MILESTONE_DB_COLUMNS as the display labels. Duration stays TEXT
+-- and Progress stays TEXT for the same reason projects.duration /
+-- projects.progress do: the values arrive as free text ("5 days", "70%",
+-- "Completed") rather than as a typed number. No FK to clients -- the other
+-- tables deliberately don't reference each other either, so a row can be
+-- uploaded/edited without constraint ordering to worry about.
+CREATE TABLE IF NOT EXISTS projectmilestone (
+    id SERIAL PRIMARY KEY,
+    client TEXT,
+    project_name TEXT,
+    task_name TEXT,
+    duration TEXT,
+    start_date DATE,
+    end_date DATE,
+    progress TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_projectmilestone_client ON projectmilestone(client);
 """
 
 
@@ -488,9 +570,17 @@ def upsert_clients(df, conn=None, sync_columns=None):
     if df.empty:
         return 0, 0
 
+    # Captured before _records_for_insert() backfills missing columns with
+    # None: Progress Status is typed into the dashboard and isn't part of
+    # the source Excel's Client sheet, so an upload that doesn't carry the
+    # column must leave existing values alone instead of blanking them.
+    has_progress_status = "Progress Status" in df.columns
+
     records = _records_for_insert(df, CLIENT_DB_COLUMNS)
     db_cols = [c for _, c in CLIENT_DB_COLUMNS]
     update_cols = [c for c in db_cols if c not in ("client", "projek_id")]
+    if not has_progress_status:
+        update_cols = [c for c in update_cols if c != "progress_status"]
     if sync_columns is not None:
         update_cols = [c for c in update_cols if c in sync_columns]
     set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
@@ -675,6 +765,8 @@ def reset_all(conn=None):
             cur.execute("TRUNCATE TABLE tickets RESTART IDENTITY")
             cur.execute("TRUNCATE TABLE projects RESTART IDENTITY")
             cur.execute("TRUNCATE TABLE clients RESTART IDENTITY")
+            cur.execute("TRUNCATE TABLE transfer_history RESTART IDENTITY")
+            cur.execute("TRUNCATE TABLE projectmilestone RESTART IDENTITY")
 
 
 def update_ticket_field(row_id, db_column, value, conn=None):
@@ -711,6 +803,220 @@ def update_project_field(row_id, db_column, value, conn=None):
                 f"UPDATE projects SET {db_column} = %s, updated_at = now() WHERE id = %s",
                 (value, row_id),
             )
+
+
+# A Development row qualifies for the automatic transfer to Warranty when
+# its hand-typed Progress Status says the work is finished AND its End Date
+# has already passed. The date comparison mirrors applyEndDateBadges()'s
+# "Expired" rule on the Home page (diffDays < 0): today itself still counts
+# as running, only strictly-past end dates count as ended. Progress Status
+# is compared case/whitespace-insensitively because it's free text typed by
+# hand, not a constrained column.
+TRANSFER_ELIGIBLE_PREDICATE = (
+    "projek_status = 'Development' "
+    "AND lower(btrim(progress_status)) = 'completed' "
+    "AND end_date IS NOT NULL AND end_date < CURRENT_DATE"
+)
+
+
+def auto_transfer_development_rows(conn=None):
+    """Move every eligible Development row to Warranty and log the change.
+
+    Eligibility: Progress Status = "Completed" and End Date already passed.
+    The move clears Progress Status (it's a Development-only field) but keeps
+    the old value in transfer_history so revert can restore it.
+
+    Three steps in one transaction: lock the eligible rows, insert history,
+    then update. FOR UPDATE serialises two Home pages loading at once, and
+    the partial unique index idx_transfer_history_active makes the history
+    INSERT a no-op when a row already has an active (un-reverted) entry --
+    which is what happens after an Excel upload drags the row back to
+    Development while the cleared Progress Status would otherwise never
+    match again.
+
+    Returns the list of rows moved (possibly empty).
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                f"""SELECT id, client, projek_id, projek_name, progress_status
+                    FROM clients
+                    WHERE {TRANSFER_ELIGIBLE_PREDICATE}
+                    ORDER BY id
+                    FOR UPDATE"""
+            )
+            eligible = cur.fetchall()
+            if not eligible:
+                return []
+
+            moved = []
+            for row_id, client, projek_id, projek_name, prev_progress in eligible:
+                cur.execute(
+                    """INSERT INTO transfer_history
+                           (client_row_id, client, projek_id, projek_name,
+                            from_status, to_status, prev_progress_status)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (client_row_id) WHERE reverted_at IS NULL
+                       DO NOTHING""",
+                    (row_id, client, projek_id, projek_name,
+                     "Development", "Warranty", prev_progress),
+                )
+                cur.execute(
+                    """UPDATE clients
+                       SET projek_status = 'Warranty',
+                           progress_status = NULL,
+                           updated_at = now()
+                       WHERE id = %s""",
+                    (row_id,),
+                )
+                moved.append({
+                    "client_row_id": row_id,
+                    "client": client,
+                    "projek_id": projek_id,
+                    "projek_name": projek_name,
+                    "prev_progress_status": prev_progress,
+                })
+            return moved
+
+
+def fetch_transfer_history(conn=None, active_only=True):
+    """Transfer log rows for the Home page panel, newest first.
+
+    active_only keeps just the transfers that are still worth showing --
+    neither reverted (undone) nor dismissed via Proceed (accepted and
+    cleared from the list). Timestamps are formatted for display since this
+    feeds the template directly.
+    """
+    sql = (
+        "SELECT id, client_row_id, client, projek_id, projek_name, "
+        "from_status, to_status, prev_progress_status, transferred_at, reverted_at "
+        "FROM transfer_history"
+    )
+    if active_only:
+        sql += " WHERE reverted_at IS NULL AND dismissed_at IS NULL"
+    sql += " ORDER BY transferred_at DESC, id DESC"
+
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    for r in rows:
+        for key in ("transferred_at", "reverted_at"):
+            val = r[key]
+            # Postgres hands back TIMESTAMPTZ in the DB's own zone (UTC on
+            # Neon), which would print 8 hours behind wall-clock time here --
+            # shift to the server's local zone before formatting.
+            if val is not None and val.tzinfo is not None:
+                val = val.astimezone()
+            r[key] = val.strftime("%d/%m/%Y %H:%M") if val else None
+    return rows
+
+
+def revert_transfer(history_id, conn=None):
+    """Undo one transfer: put the row back to its previous phase/status.
+
+    The client row is only touched if it still sits in the status the
+    transfer moved it to -- if someone manually edited it to Maintenance
+    (or deleted it) since, reverting just closes the history entry instead
+    of clobbering that newer change.
+
+    Returns {"success": bool, "row_restored": bool, "error": str|None}.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                """SELECT client_row_id, from_status, to_status,
+                          prev_progress_status, reverted_at
+                   FROM transfer_history
+                   WHERE id = %s
+                   FOR UPDATE""",
+                (history_id,),
+            )
+            h = cur.fetchone()
+            if not h:
+                return {"success": False, "row_restored": False, "error": "Transfer not found"}
+            row_id, from_status, to_status, prev_progress, reverted_at = h
+            if reverted_at is not None:
+                return {"success": True, "row_restored": False, "error": None}
+
+            cur.execute("SELECT projek_status FROM clients WHERE id = %s", (row_id,))
+            current = cur.fetchone()
+            restored = False
+            if current and current[0] == to_status:
+                cur.execute(
+                    """UPDATE clients
+                       SET projek_status = %s,
+                           progress_status = %s,
+                           updated_at = now()
+                       WHERE id = %s""",
+                    (from_status, prev_progress, row_id),
+                )
+                restored = True
+
+            cur.execute(
+                "UPDATE transfer_history SET reverted_at = now() WHERE id = %s",
+                (history_id,),
+            )
+            return {"success": True, "row_restored": restored, "error": None}
+
+
+def dismiss_transfer(history_id, conn=None):
+    """Accept a transfer and drop it from the Home panel (the Proceed button).
+
+    Only the history entry is closed (dismissed_at) -- the client row stays
+    in Warranty. Deliberately NOT the same as reverted_at: a dismissed entry
+    still keeps its row out of Development on the next Excel upload (see
+    reassert_active_transfers) and still blocks a duplicate history entry
+    via idx_transfer_history_active; all it changes is that the panel stops
+    listing it.
+
+    Returns {"success": bool, "already_dismissed": bool, "error": str|None}.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "SELECT dismissed_at FROM transfer_history WHERE id = %s FOR UPDATE",
+                (history_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "already_dismissed": False, "error": "Transfer not found"}
+            already = row[0] is not None
+            if not already:
+                cur.execute(
+                    "UPDATE transfer_history SET dismissed_at = now() WHERE id = %s",
+                    (history_id,),
+                )
+            return {"success": True, "already_dismissed": already, "error": None}
+
+
+def reassert_active_transfers(conn=None):
+    """Re-apply still-active transfers after an Excel upload.
+
+    The source workbook's Client sheet always says "Development" and has no
+    Progress Status column, so an upload both moves the row back to
+    Development and leaves Progress Status untouched (upsert_clients
+    excludes it). Without this, a row already transferred to Warranty would
+    land back in Development and never match the eligibility rule again
+    (its Progress Status was cleared on transfer). Restores to_status for
+    every row whose active history entry says it was moved there.
+
+    Returns the number of rows pushed back.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                """UPDATE clients c
+                   SET projek_status = h.to_status,
+                       updated_at = now()
+                   FROM transfer_history h
+                   WHERE h.client_row_id = c.id
+                     AND h.reverted_at IS NULL
+                     AND c.projek_status = h.from_status"""
+            )
+            return cur.rowcount
 
 
 def _clean_insert_values(db_values, valid_cols):
@@ -858,3 +1164,67 @@ def insert_client_row(db_values, conn=None):
                 [values[c] for c in cols],
             )
             return cur.fetchone()[0]
+
+
+def fetch_project_milestone_df(conn=None):
+    """Milestones as a dataframe shaped exactly like fetch_clients_df():
+    an _row_idx (the table's id) plus the display column names, with the
+    two date columns parsed to datetime so callers can format them."""
+    db_cols = [c for _, c in PROJECT_MILESTONE_DB_COLUMNS]
+    display_cols = [c for c, _ in PROJECT_MILESTONE_DB_COLUMNS]
+    sql = (
+        f"SELECT id, {', '.join(db_cols)} FROM projectmilestone "
+        "ORDER BY client, project_name, task_name, id"
+    )
+
+    with db_connection(conn) as c:
+        df = pd.read_sql_query(sql, c)
+
+    if df.empty:
+        return pd.DataFrame(columns=["_row_idx"] + display_cols)
+
+    df = df.rename(columns=dict(zip(db_cols, display_cols)))
+    df = df.rename(columns={"id": "_row_idx"})
+
+    for col in ["Startdate", "Enddate"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col])
+
+    return df
+
+
+def insert_project_milestone_row(db_values, conn=None):
+    values = _clean_insert_values(db_values, {c for _, c in PROJECT_MILESTONE_DB_COLUMNS})
+    if not values.get("client"):
+        raise ValueError("Client is required")
+    if not values.get("task_name"):
+        raise ValueError("Taskname is required")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cols = list(values.keys())
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["%s"] * len(cols))
+            cur.execute(
+                f"INSERT INTO projectmilestone ({col_list}) VALUES ({placeholders}) RETURNING id",
+                [values[c] for c in cols],
+            )
+            return cur.fetchone()[0]
+
+
+def update_project_milestone_field(row_id, db_column, value, conn=None):
+    valid_cols = {c for _, c in PROJECT_MILESTONE_DB_COLUMNS}
+    if db_column not in valid_cols:
+        raise ValueError(f"Unknown column: {db_column}")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                f"UPDATE projectmilestone SET {db_column} = %s, updated_at = now() WHERE id = %s",
+                (value, row_id),
+            )
+
+
+def delete_project_milestone_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM projectmilestone WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
