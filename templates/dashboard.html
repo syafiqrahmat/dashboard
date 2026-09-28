@@ -684,6 +684,7 @@ body.role-admin .viewer-only-note{display:none}
     <nav class="sidebar-list">
       {% if client_category == 'Development' %}
       <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(3, this)">Project</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
       {% elif client_category == 'Warranty' %}
       <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(2, this)">Warranty</button>
       {% else %}
@@ -691,6 +692,7 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(4, this)">Ageing Analysis</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(5, this)">Ticket Analysis</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(8, this)">Ageing List</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
       {% endif %}
     </nav>
     {% else %}
@@ -701,6 +703,7 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(1, this)">Maintenance</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(2, this)">Warranty</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(3, this)">Project</button>
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(5, this)">Ticket Analysis</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(7, this)">Ticket Details</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(4, this)">Ageing Analysis</button>
@@ -853,6 +856,10 @@ body.role-admin .viewer-only-note{display:none}
 
 <div class="tab-pane{{ ' active' if default_tab_idx == 10 else '' }}" id="tab-10" data-loaded="{{ 'true' if default_tab_idx == 10 else 'false' }}">
   {% if default_tab_idx == 10 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
+</div>
+
+<div class="tab-pane{{ ' active' if default_tab_idx == 11 else '' }}" id="tab-11" data-loaded="{{ 'true' if default_tab_idx == 11 else 'false' }}">
+  {% if default_tab_idx == 11 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
 {% endif %}
@@ -1605,6 +1612,7 @@ var DATE_COLUMNS = [
   'Start Date', 'End Date',
   'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
   'Actual Start Date', 'Actual End Date',
+  'Startdate', 'Enddate',
 ];
 function isDateColumn(col) {
   return DATE_COLUMNS.indexOf(col) !== -1;
@@ -1975,7 +1983,13 @@ var editTables = [
       {col: 'Overall Progress Task (%)', derived: true, placeholder: ''}
     ]
   }],
-  ['client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9']
+  ['client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9'],
+  ['milestone-table', 'saveBtn11', 'cancelBtn11', 'editBtn11', {
+    btnId: 'addRowBtn11', dbTable: 'milestones',
+    // Order/count must match tab_11.html's <thead> (PROJECT_MILESTONE_DB_COLUMNS
+    // in api/db.py) or a new row's cells would land under the wrong headers.
+    columns: ['Client', 'Projectname', 'Taskname', 'Duration', 'Startdate', 'Enddate', 'Progress']
+  }]
 ];
 
 /* Re-run after every lazy tab load, not just once at page-bottom parse
@@ -2020,6 +2034,9 @@ function cancelEdit3() { return false; }
 function toggleEdit9() { return false; }
 function saveChanges9() { return false; }
 function cancelEdit9() { return false; }
+function toggleEdit11() { return false; }
+function saveChanges11() { return false; }
+function cancelEdit11() { return false; }
 
 /* ---------- Project PDF report (client-side, pdfmake) ----------
    Generated entirely in the browser (no server-side PDF dependency, no

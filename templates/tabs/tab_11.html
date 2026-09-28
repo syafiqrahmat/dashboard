@@ -1,0 +1,54 @@
+{# Project Milestones tab -- one editable table over the projectmilestone
+   table (Client, Projectname, Taskname, Duration, Startdate, Enddate,
+   Progress). Follows the same inline-editing contract as tab_9: every
+   td carries data-col with the display column name, every tr carries
+   data-row-idx + data-sheet="Milestone" so /api/save knows which row and
+   which column map to update. The trailing badge cell is not a column --
+   applyEndDateBadges() fills it from data-end-date on load. #}
+<div class="chart-full">
+  <div class="edit-bar" style="margin-bottom:4px">
+    <span style="flex:1"></span>
+    <button class="btn-add-row admin-only" id="addRowBtn11" type="button" style="display:none">+ Add Row</button>
+    <button class="btn-save" id="saveBtn11" onclick="saveChanges11()" style="display:none">Save Changes</button>
+    <button class="btn-cancel" id="cancelBtn11" onclick="cancelEdit11()" style="display:none">Cancel</button>
+    <button class="btn-edit admin-only" id="editBtn11" onclick="toggleEdit11()">Enable Editing</button>
+  </div>
+  <p class="disclaimer-note">
+    Milestones/tasks tracked per project. <strong>Client</strong> and <strong>Taskname</strong> are
+    required when adding a row; Startdate/Enddate use the date picker so they save as real dates.
+    Duration and Progress are free text, matching how they're stored on the Project Details table.
+  </p>
+  <div class="data-table-wrap">
+    <table class="client-table" id="milestone-table">
+      <thead>
+        <tr>
+          {% for key in milestone_cols %}
+          <th>{{ key }}</th>
+          {% endfor %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in milestone_rows %}
+        <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-sheet="Milestone">
+          {% for key in milestone_cols %}
+          {% set display_val = row.get(key) if row.get(key) is not none and row.get(key) != 'None' and row.get(key) != 'nan' else '' %}
+          {% if key == 'Enddate' and display_val %}
+          <td class="editable-cell end-date-cell" data-col="{{ key }}">{{ display_val }}</td>
+          {% else %}
+          <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
+          {% endif %}
+          {% endfor %}
+          <td class="end-date-badge-cell" data-end-date="{{ row.get('Enddate', '') }}"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if not milestone_rows %}
+  <p class="disclaimer-note">
+    No milestones yet — use <strong>Enable Editing</strong> then <strong>+ Add Row</strong> to create
+    the first one.
+  </p>
+  {% endif %}
+</div>

@@ -109,6 +109,7 @@ pio.templates["plotly_white"].layout.hoverlabel = dict(
 TICKET_DB_COL_BY_DISPLAY = {display: col for display, col in db.TICKET_DB_COLUMNS}
 CLIENT_DB_COL_BY_DISPLAY = {display: col for display, col in db.CLIENT_DB_COLUMNS}
 PROJECT_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_DB_COLUMNS}
+MILESTONE_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_MILESTONE_DB_COLUMNS}
 
 _schema_ready = False
 
@@ -210,6 +211,11 @@ def load_project_data():
 def load_client_data():
     ensure_schema()
     return db.fetch_clients_df(conn=request_conn())
+
+
+def load_milestone_data():
+    ensure_schema()
+    return db.fetch_project_milestone_df(conn=request_conn())
 
 
 def build_warranty_charts(df):
@@ -1955,6 +1961,41 @@ def build_tab_context(idx, filters, filter_options, df=None):
     if idx == 10:
         return "tabs/tab_10.html", common
 
+    if idx == 11:
+        cols = [c for c, _ in db.PROJECT_MILESTONE_DB_COLUMNS]
+        try:
+            milestone_df = load_milestone_data()
+        except Exception as e:
+            log(f"DB error loading milestones: {e}", "ERROR")
+            milestone_df = pd.DataFrame()
+        if milestone_df.empty:
+            milestone_df = pd.DataFrame(columns=["_row_idx"] + cols)
+        # Same narrowing as every other tab: the ?client=... / ?projek_name=...
+        # in the URL (set when a Home row is clicked) scopes this table too,
+        # so a single-client view doesn't list every other client's tasks.
+        if filters["clients"]:
+            milestone_df = milestone_df[milestone_df["Client"].isin(filters["clients"])]
+        if filters.get("projek_name"):
+            milestone_df = milestone_df[
+                milestone_df["Projectname"].fillna("").str.contains(
+                    filters["projek_name"], case=False, regex=False
+                )
+            ]
+
+        detail = milestone_df[["_row_idx"] + [c for c in cols if c in milestone_df.columns]].copy()
+        for c in ("Startdate", "Enddate"):
+            if c in detail.columns and not detail[c].isna().all():
+                detail[c] = detail[c].dt.strftime("%d/%m/%Y")
+        detail = detail.fillna("")
+        return (
+            "tabs/tab_11.html",
+            {
+                **common,
+                "milestone_cols": [c for c in cols if c in detail.columns],
+                "milestone_rows": detail.to_dict("records"),
+            },
+        )
+
     raise ValueError(f"Unknown tab index: {idx}")
 
 
@@ -2019,7 +2060,7 @@ def index():
 
 @app.route("/api/tab/<int:idx>")
 def api_tab(idx):
-    if idx < 0 or idx > 10:
+    if idx < 0 or idx > 11:
         return "Not found", 404
     filters = parse_filters(request.args)
     filter_options = build_filter_options(filters)
@@ -2390,6 +2431,16 @@ def api_save():
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    if sheet == "Milestone":
+        db_column = MILESTONE_DB_COL_BY_DISPLAY.get(column)
+        if not db_column:
+            return {"success": False, "error": f"Column not editable: {column}"}
+        try:
+            db.update_project_milestone_field(int(row_idx), db_column, value, conn=request_conn())
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     if sheet == "Client Project":
         db_column = PROJECT_DB_COL_BY_DISPLAY.get(column)
         if not db_column:
@@ -2423,6 +2474,7 @@ def api_add_row():
         "clients": (CLIENT_DB_COL_BY_DISPLAY, db.insert_client_row),
         "projects": (PROJECT_DB_COL_BY_DISPLAY, db.insert_project_row),
         "tickets": (TICKET_DB_COL_BY_DISPLAY, db.insert_ticket_row),
+        "milestones": (MILESTONE_DB_COL_BY_DISPLAY, db.insert_project_milestone_row),
     }.get(table, (None, None))
     if not insert_fn:
         return jsonify({"success": False, "error": f"Unknown table: {table}"}), 400
@@ -2475,6 +2527,7 @@ def api_delete_row():
         "projects": db.delete_project_row,
         "tickets": db.delete_ticket_row,
         "clients": db.delete_client_row,
+        "milestones": db.delete_project_milestone_row,
     }.get(table)
     if not delete_fn:
         return jsonify({"success": False, "error": f"Unknown table: {table}"}), 400

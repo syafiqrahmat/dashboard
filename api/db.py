@@ -83,6 +83,19 @@ CLIENT_DB_COLUMNS = [
     ("Source File", "source_file"),
 ]
 
+# Display label -> column for the projectmilestone table. The labels are the
+# field names the table was specified with (Projectname, Startdate, ...);
+# the columns themselves stay snake_case like every other table here.
+PROJECT_MILESTONE_DB_COLUMNS = [
+    ("Client", "client"),
+    ("Projectname", "project_name"),
+    ("Taskname", "task_name"),
+    ("Duration", "duration"),
+    ("Startdate", "start_date"),
+    ("Enddate", "end_date"),
+    ("Progress", "progress"),
+]
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tickets (
     id SERIAL PRIMARY KEY,
@@ -275,6 +288,30 @@ ALTER TABLE transfer_history ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;
 -- happened and must not be logged twice -- it's only hidden from the panel.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transfer_history_active
     ON transfer_history(client_row_id) WHERE reverted_at IS NULL;
+
+-- Milestones/tasks per project (Client, Projectname, Taskname, Duration,
+-- Startdate, Enddate, Progress). Column names follow the snake_case style
+-- of the other tables -- the exact field names above live in
+-- PROJECT_MILESTONE_DB_COLUMNS as the display labels. Duration stays TEXT
+-- and Progress stays TEXT for the same reason projects.duration /
+-- projects.progress do: the values arrive as free text ("5 days", "70%",
+-- "Completed") rather than as a typed number. No FK to clients -- the other
+-- tables deliberately don't reference each other either, so a row can be
+-- uploaded/edited without constraint ordering to worry about.
+CREATE TABLE IF NOT EXISTS projectmilestone (
+    id SERIAL PRIMARY KEY,
+    client TEXT,
+    project_name TEXT,
+    task_name TEXT,
+    duration TEXT,
+    start_date DATE,
+    end_date DATE,
+    progress TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_projectmilestone_client ON projectmilestone(client);
 """
 
 
@@ -729,6 +766,7 @@ def reset_all(conn=None):
             cur.execute("TRUNCATE TABLE projects RESTART IDENTITY")
             cur.execute("TRUNCATE TABLE clients RESTART IDENTITY")
             cur.execute("TRUNCATE TABLE transfer_history RESTART IDENTITY")
+            cur.execute("TRUNCATE TABLE projectmilestone RESTART IDENTITY")
 
 
 def update_ticket_field(row_id, db_column, value, conn=None):
@@ -1126,3 +1164,67 @@ def insert_client_row(db_values, conn=None):
                 [values[c] for c in cols],
             )
             return cur.fetchone()[0]
+
+
+def fetch_project_milestone_df(conn=None):
+    """Milestones as a dataframe shaped exactly like fetch_clients_df():
+    an _row_idx (the table's id) plus the display column names, with the
+    two date columns parsed to datetime so callers can format them."""
+    db_cols = [c for _, c in PROJECT_MILESTONE_DB_COLUMNS]
+    display_cols = [c for c, _ in PROJECT_MILESTONE_DB_COLUMNS]
+    sql = (
+        f"SELECT id, {', '.join(db_cols)} FROM projectmilestone "
+        "ORDER BY client, project_name, task_name, id"
+    )
+
+    with db_connection(conn) as c:
+        df = pd.read_sql_query(sql, c)
+
+    if df.empty:
+        return pd.DataFrame(columns=["_row_idx"] + display_cols)
+
+    df = df.rename(columns=dict(zip(db_cols, display_cols)))
+    df = df.rename(columns={"id": "_row_idx"})
+
+    for col in ["Startdate", "Enddate"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col])
+
+    return df
+
+
+def insert_project_milestone_row(db_values, conn=None):
+    values = _clean_insert_values(db_values, {c for _, c in PROJECT_MILESTONE_DB_COLUMNS})
+    if not values.get("client"):
+        raise ValueError("Client is required")
+    if not values.get("task_name"):
+        raise ValueError("Taskname is required")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cols = list(values.keys())
+            col_list = ", ".join(cols)
+            placeholders = ", ".join(["%s"] * len(cols))
+            cur.execute(
+                f"INSERT INTO projectmilestone ({col_list}) VALUES ({placeholders}) RETURNING id",
+                [values[c] for c in cols],
+            )
+            return cur.fetchone()[0]
+
+
+def update_project_milestone_field(row_id, db_column, value, conn=None):
+    valid_cols = {c for _, c in PROJECT_MILESTONE_DB_COLUMNS}
+    if db_column not in valid_cols:
+        raise ValueError(f"Unknown column: {db_column}")
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                f"UPDATE projectmilestone SET {db_column} = %s, updated_at = now() WHERE id = %s",
+                (value, row_id),
+            )
+
+
+def delete_project_milestone_row(row_id, conn=None):
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM projectmilestone WHERE id = %s", (row_id,))
+            return cur.rowcount > 0
