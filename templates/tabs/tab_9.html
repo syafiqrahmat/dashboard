@@ -42,8 +42,9 @@
     <h3 style="margin-top:18px">Transferred to Warranty ({{ transfer_history|length }})</h3>
     <p class="disclaimer-note">
       These Development projects had Progress Status <strong>Completed</strong> and an End Date that has
-      already passed, so they were moved to the Warranty section automatically. Reverting puts a row back
-      under Development and restores its previous Progress Status.
+      already passed, so they were moved to the Warranty section automatically.
+      <strong>Revert</strong> puts the row back under Development and restores its previous Progress
+      Status; <strong>Proceed</strong> keeps the transfer and just removes the row from this list.
     </p>
     <div class="data-table-wrap">
       <table class="client-table">
@@ -65,8 +66,11 @@
             <td>{{ t.get('projek_name') or '' }}</td>
             <td>{{ t.get('prev_progress_status') or '' }}</td>
             <td>{{ t.get('transferred_at') or '' }}</td>
-            <td>
+            <td class="transfer-actions">
               <button type="button" class="btn-revert-transfer" data-history-id="{{ t.get('id') }}">Revert</button>
+              <button type="button" class="btn-proceed-transfer" data-history-id="{{ t.get('id') }}">Proceed</button>
+              <button type="button" class="btn-confirm-transfer" data-history-id="{{ t.get('id') }}" hidden>Confirm</button>
+              <button type="button" class="btn-cancel-transfer" hidden>Cancel</button>
             </td>
           </tr>
           {% endfor %}

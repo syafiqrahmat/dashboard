@@ -560,12 +560,31 @@ body.role-admin .admin-only{display:inline-flex !important}
    whole panel shrink-wrap into one line. */
 .transfer-history.admin-only{display:none !important}
 body.role-admin .transfer-history.admin-only{display:block !important}
-.transfer-history .btn-revert-transfer{
-  padding:4px 12px;background:#8e44ad;color:#fff;border:none;border-radius:6px;
+/* Revert -> Confirm/Cancel is an inline two-step confirm: Revert only
+   reveals the question, Confirm is what actually posts the request. */
+.transfer-history .btn-revert-transfer,
+.transfer-history .btn-proceed-transfer,
+.transfer-history .btn-confirm-transfer,
+.transfer-history .btn-cancel-transfer{
+  padding:4px 12px;color:#fff;border:none;border-radius:6px;
   font-weight:600;font-size:0.78rem;cursor:pointer;white-space:nowrap;
 }
+.transfer-history .btn-revert-transfer{background:#8e44ad}
 .transfer-history .btn-revert-transfer:hover{background:#7d3c98}
-.transfer-history .btn-revert-transfer:disabled{opacity:.5;cursor:default}
+.transfer-history .btn-proceed-transfer{background:#27ae60}
+.transfer-history .btn-proceed-transfer:hover{background:#219653}
+.transfer-history .btn-confirm-transfer{background:#3498db}
+/* The confirm step inherits the colour of the action it is confirming --
+   red for the undo, green for keeping the transfer. */
+.transfer-history .btn-confirm-transfer.is-revert{background:#c0392b}
+.transfer-history .btn-confirm-transfer.is-revert:hover{background:#a93226}
+.transfer-history .btn-confirm-transfer.is-proceed{background:#27ae60}
+.transfer-history .btn-confirm-transfer.is-proceed:hover{background:#219653}
+.transfer-history .btn-confirm-transfer:hover{background:#2980b9}
+.transfer-history .btn-cancel-transfer{background:#7f8c8d}
+.transfer-history .btn-cancel-transfer:hover{background:#6c7a7b}
+.transfer-history button:disabled{opacity:.5;cursor:default}
+.transfer-history .transfer-actions{display:flex;gap:6px;align-items:center;justify-content:flex-end}
 .viewer-only-note{display:block;color:var(--text-dim);font-size:0.82rem;margin-top:10px}
 body.role-admin .viewer-only-note{display:none}
 .role-modal-overlay{
@@ -1185,24 +1204,90 @@ function postRevertTransfer(historyId) {
     body: JSON.stringify({history_id: historyId})
   }).then(function(r) { return r.json(); });
 }
+/* Proceed: keep the transfer, just drop the row off the panel. */
+function postDismissTransfer(historyId) {
+  return fetch('/api/dismiss_transfer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({history_id: historyId})
+  }).then(function(r) { return r.json(); });
+}
 document.addEventListener('click', function(e) {
-  var btn = e.target.closest('.btn-revert-transfer');
+  var btn = e.target.closest(
+    '.btn-revert-transfer, .btn-proceed-transfer, .btn-confirm-transfer, .btn-cancel-transfer'
+  );
   if (!btn) return;
-  var historyId = btn.getAttribute('data-history-id');
-  if (!historyId) return;
-  if (!confirm('Move this project back to Development?')) return;
-  btn.disabled = true;
-  postRevertTransfer(historyId).then(function(result) {
+  var cell = btn.closest('.transfer-actions');
+  if (!cell) return;
+  var revertBtn = cell.querySelector('.btn-revert-transfer');
+  var proceedBtn = cell.querySelector('.btn-proceed-transfer');
+  var confirmBtn = cell.querySelector('.btn-confirm-transfer');
+  var cancelBtn = cell.querySelector('.btn-cancel-transfer');
+  if (!revertBtn || !proceedBtn || !confirmBtn || !cancelBtn) return;
+
+  function showPrimary() {
+    cell.removeAttribute('data-pending');
+    confirmBtn.hidden = true;
+    cancelBtn.hidden = true;
+    revertBtn.hidden = false;
+    proceedBtn.hidden = false;
+    revertBtn.disabled = false;
+    proceedBtn.disabled = false;
+    confirmBtn.disabled = false;
+    cancelBtn.disabled = false;
+  }
+
+  /* Step 1: pick an action. Both primary buttons swap out for
+     Confirm/Cancel, and which one was pressed is remembered on the cell so
+     Confirm knows what it is confirming -- nothing is posted yet. */
+  if (btn.classList.contains('btn-revert-transfer') || btn.classList.contains('btn-proceed-transfer')) {
+    var action = btn.classList.contains('btn-revert-transfer') ? 'revert' : 'proceed';
+    cell.setAttribute('data-pending', action);
+    revertBtn.hidden = true;
+    proceedBtn.hidden = true;
+    confirmBtn.textContent = action === 'revert' ? 'Confirm Revert' : 'Confirm Proceed';
+    confirmBtn.classList.toggle('is-revert', action === 'revert');
+    confirmBtn.classList.toggle('is-proceed', action === 'proceed');
+    confirmBtn.hidden = false;
+    cancelBtn.hidden = false;
+    confirmBtn.focus();
+    return;
+  }
+
+  /* Back out of the question without touching the server. */
+  if (btn.classList.contains('btn-cancel-transfer')) {
+    showPrimary();
+    return;
+  }
+
+  /* Confirm: actually post the chosen action. */
+  var action = cell.getAttribute('data-pending');
+  var historyId = confirmBtn.getAttribute('data-history-id');
+  if (!action || !historyId) return;
+  confirmBtn.disabled = true;
+  cancelBtn.disabled = true;
+  revertBtn.disabled = true;
+  proceedBtn.disabled = true;
+
+  function failed(message) {
+    showPrimary();
+    showToast((action === 'revert' ? 'Revert failed: ' : 'Proceed failed: ') + message, 'error');
+  }
+
+  var request = action === 'revert' ? postRevertTransfer(historyId) : postDismissTransfer(historyId);
+  request.then(function(result) {
     if (result.success) {
-      showToast(result.row_restored ? 'Transfer reverted' : 'History cleared -- the row had been changed since the transfer', 'success');
+      if (action === 'revert') {
+        showToast(result.row_restored ? 'Transfer reverted' : 'History cleared -- the row had been changed since the transfer', 'success');
+      } else {
+        showToast('Transfer kept and removed from the list', 'success');
+      }
       setTimeout(function() { window.location.reload(); }, 700);
     } else {
-      btn.disabled = false;
-      showToast('Revert failed: ' + (result.error || 'unknown'), 'error');
+      failed(result.error || 'unknown');
     }
   }).catch(function(err) {
-    btn.disabled = false;
-    showToast('Revert failed: ' + err.message, 'error');
+    failed(err.message);
   });
 });
 document.addEventListener('click', function(e) {

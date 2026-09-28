@@ -254,13 +254,25 @@ CREATE TABLE IF NOT EXISTS transfer_history (
     to_status TEXT NOT NULL,
     prev_progress_status TEXT,
     transferred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    reverted_at TIMESTAMPTZ
+    reverted_at TIMESTAMPTZ,
+    -- Set by the Proceed button: the transfer stands, the admin just
+    -- doesn't want the row listed in the panel any more. Kept separate
+    -- from reverted_at because the two mean opposite things -- a dismissed
+    -- entry must keep re-asserting itself after an Excel upload (see
+    -- reassert_active_transfers), a reverted one must not.
+    dismissed_at TIMESTAMPTZ
 );
+
+-- Column added after the table already existed (same pattern as the other
+-- post-hoc ALTERs above -- init_schema runs SCHEMA_SQL on every startup).
+ALTER TABLE transfer_history ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ;
 
 -- One *active* (not yet reverted) transfer per client row. This is what
 -- makes the auto-transfer idempotent: a re-upload can push a row back to
 -- Development, and the next Home load moves it again without writing a
 -- second history entry (the INSERT ... ON CONFLICT DO NOTHING below).
+-- Dismissed entries still count as active for the same reason: the move
+-- happened and must not be logged twice -- it's only hidden from the panel.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_transfer_history_active
     ON transfer_history(client_row_id) WHERE reverted_at IS NULL;
 """
@@ -832,9 +844,10 @@ def auto_transfer_development_rows(conn=None):
 def fetch_transfer_history(conn=None, active_only=True):
     """Transfer log rows for the Home page panel, newest first.
 
-    active_only keeps just the transfers that haven't been reverted -- those
-    are the ones that can (and need to) be undone. Timestamps are formatted
-    for display since this feeds the template directly.
+    active_only keeps just the transfers that are still worth showing --
+    neither reverted (undone) nor dismissed via Proceed (accepted and
+    cleared from the list). Timestamps are formatted for display since this
+    feeds the template directly.
     """
     sql = (
         "SELECT id, client_row_id, client, projek_id, projek_name, "
@@ -842,7 +855,7 @@ def fetch_transfer_history(conn=None, active_only=True):
         "FROM transfer_history"
     )
     if active_only:
-        sql += " WHERE reverted_at IS NULL"
+        sql += " WHERE reverted_at IS NULL AND dismissed_at IS NULL"
     sql += " ORDER BY transferred_at DESC, id DESC"
 
     with db_connection(conn) as c:
@@ -853,7 +866,13 @@ def fetch_transfer_history(conn=None, active_only=True):
 
     for r in rows:
         for key in ("transferred_at", "reverted_at"):
-            r[key] = r[key].strftime("%d/%m/%Y %H:%M") if r[key] else None
+            val = r[key]
+            # Postgres hands back TIMESTAMPTZ in the DB's own zone (UTC on
+            # Neon), which would print 8 hours behind wall-clock time here --
+            # shift to the server's local zone before formatting.
+            if val is not None and val.tzinfo is not None:
+                val = val.astimezone()
+            r[key] = val.strftime("%d/%m/%Y %H:%M") if val else None
     return rows
 
 
@@ -903,6 +922,36 @@ def revert_transfer(history_id, conn=None):
                 (history_id,),
             )
             return {"success": True, "row_restored": restored, "error": None}
+
+
+def dismiss_transfer(history_id, conn=None):
+    """Accept a transfer and drop it from the Home panel (the Proceed button).
+
+    Only the history entry is closed (dismissed_at) -- the client row stays
+    in Warranty. Deliberately NOT the same as reverted_at: a dismissed entry
+    still keeps its row out of Development on the next Excel upload (see
+    reassert_active_transfers) and still blocks a duplicate history entry
+    via idx_transfer_history_active; all it changes is that the panel stops
+    listing it.
+
+    Returns {"success": bool, "already_dismissed": bool, "error": str|None}.
+    """
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "SELECT dismissed_at FROM transfer_history WHERE id = %s FOR UPDATE",
+                (history_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "already_dismissed": False, "error": "Transfer not found"}
+            already = row[0] is not None
+            if not already:
+                cur.execute(
+                    "UPDATE transfer_history SET dismissed_at = now() WHERE id = %s",
+                    (history_id,),
+                )
+            return {"success": True, "already_dismissed": already, "error": None}
 
 
 def reassert_active_transfers(conn=None):

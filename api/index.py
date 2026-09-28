@@ -2505,5 +2505,24 @@ def api_revert_transfer():
     return jsonify(result)
 
 
+@app.route("/api/dismiss_transfer", methods=["POST"])
+def api_dismiss_transfer():
+    """Proceed on a Home panel transfer: keep it, stop listing it."""
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json() or {}
+    history_id = data.get("history_id")
+    try:
+        result = db.dismiss_transfer(int(history_id), conn=request_conn())
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Missing or invalid history_id"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    if not result["success"]:
+        return jsonify(result), 404
+    log(f"Dismissed transfer #{history_id}")
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     app.run(debug=True, port=8501)
