@@ -37,6 +37,44 @@
     the Project Details table, so they cover the full span even though individual tasks' actual dates vary.
     A blank cell means no task under that project has an Actual date recorded yet.
   </p>
+  {% if transfer_history %}
+  <div class="transfer-history admin-only">
+    <h3 style="margin-top:18px">Transferred to Warranty ({{ transfer_history|length }})</h3>
+    <p class="disclaimer-note">
+      These Development projects had Progress Status <strong>Completed</strong> and an End Date that has
+      already passed, so they were moved to the Warranty section automatically. Reverting puts a row back
+      under Development and restores its previous Progress Status.
+    </p>
+    <div class="data-table-wrap">
+      <table class="client-table">
+        <thead>
+          <tr>
+            <th>Client</th>
+            <th>Projek ID</th>
+            <th>Projek Name</th>
+            <th>Progress Status</th>
+            <th>Transferred</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in transfer_history %}
+          <tr>
+            <td>{{ t.get('client') or '' }}</td>
+            <td>{{ t.get('projek_id') or '' }}</td>
+            <td>{{ t.get('projek_name') or '' }}</td>
+            <td>{{ t.get('prev_progress_status') or '' }}</td>
+            <td>{{ t.get('transferred_at') or '' }}</td>
+            <td>
+              <button type="button" class="btn-revert-transfer" data-history-id="{{ t.get('id') }}">Revert</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
   {% if overall_client_charts.status_sections %}
   {% for status, section in overall_client_charts.status_sections.items() %}
   <h3 style="margin-top:18px">{{ status }} ({{ section.count }})</h3>
@@ -48,7 +86,11 @@
           {% set skip_cols_9 = ['_row_idx', 'Source File'] %}
           {% for key in section.rows[0].keys() %}
             {% if key not in skip_cols_9 %}
-            <th>{{ key }}</th>
+            {#- The Maintenance section's Start/End Date are the contract
+                period, so the header says so. Only the <th> is renamed --
+                cells keep data-col="Start Date"/"End Date" so inline
+                editing still saves under the real columns. #}
+            <th>{% if status == 'Maintenance' and key == 'Start Date' %}Contract Start{% elif status == 'Maintenance' and key == 'End Date' %}Contract End{% else %}{{ key }}{% endif %}</th>
             {% endif %}
           {% endfor %}
           <th></th>

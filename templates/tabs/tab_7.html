@@ -31,39 +31,65 @@
     </table>
   </div>
 </div>
-{% set skip_cols = ['_row_idx', 'Source File'] %}
-{% for client, rows in detail_by_client.items() %}
-<div class="client-section">
-  <details>
-    <summary>{{ client }} ({{ rows|length }} tickets)</summary>
-    <div class="data-table-wrap" style="margin-top:8px">
-      <table class="detail-table" data-client="{{ client }}">
-        <thead>
-          <tr>
-            {% if rows[0] is defined %}
-            {% for key in rows[0].keys() %}
-              {% if key not in skip_cols and key != 'Client' %}
-                <th>{{ key }}</th>
-              {% endif %}
-            {% endfor %}
-            {% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for row in rows %}
-          <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="{{ row.get('Client', '') }}">
-            {% for key, val in row.items() %}
-              {% if key not in skip_cols and key != 'Client' %}
-                <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' else '' }}</td>
-              {% endif %}
-            {% endfor %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </details>
+{% if detail_groups['current_total'] + detail_groups['old_total'] > 0 %}
+{#- The tab is two top-level groups -- Current Contract (tickets created
+    on/after the contract's Start Date) and Old Contract (before it) --
+    switched between with the buttons above. Each group holds one
+    collapsed table per client; contract dates in a summary line come
+    from the Home page's Maintenance contract rows. #}
+<div class="contract-group-tabs">
+  <button class="contract-group-btn active" type="button" onclick="switchContractGroup('current', this)">Current Contract ({{ detail_groups['current_total'] }})</button>
+  <button class="contract-group-btn" type="button" onclick="switchContractGroup('old', this)">Old Contract ({{ detail_groups['old_total'] }})</button>
 </div>
+{% set skip_cols = ['_row_idx', 'Source File'] %}
+{% macro ticket_table(client, rows) %}
+<div class="data-table-wrap" style="margin-top:8px">
+  <table class="detail-table" data-client="{{ client }}">
+    <thead>
+      <tr>
+        {% if rows[0] is defined %}
+        {% for key in rows[0].keys() %}
+          {% if key not in skip_cols and key != 'Client' %}
+            <th>{{ key }}</th>
+          {% endif %}
+        {% endfor %}
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-source="{{ row.get('Source File', '') }}" data-sheet="{{ row.get('Client', '') }}">
+        {% for key, val in row.items() %}
+          {% if key not in skip_cols and key != 'Client' %}
+            <td class="editable-cell" data-col="{{ key }}">{{ val if val is not none and val != 'None' and val != 'nan' and val != 'NaT' else '' }}</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+{% for group_key, group_label in [('current', 'Current Contract'), ('old', 'Old Contract')] %}
+{% set entries = detail_groups[group_key] %}
+<div class="contract-group{{ ' active' if group_key == 'current' }}" id="contract-group-{{ group_key }}">
+  <h3>{{ group_label }} ({{ detail_groups[group_key + '_total'] }} tickets)
+    {% for status, count in detail_groups[group_key + '_status'] %}
+    <span class="status-count {{ {'Pending': 'pending', 'Inprogress': 'inprogress', 'Completed': 'completed', 'Closed': 'closed'}.get(status, 'other') }}">{{ status }}: {{ count }}</span>
+    {% endfor %}
+  </h3>
+  {% for entry in entries %}
+  <div class="client-section">
+    <details>
+      <summary>{{ entry['client'] }}{% if entry['contract_start'] %} ({{ entry['contract_start'] }}{% if entry['contract_end'] %} &ndash; {{ entry['contract_end'] }}{% endif %}){% endif %} &mdash; {{ entry['rows']|length }} tickets</summary>
+      {{ ticket_table(entry['client'], entry['rows']) }}
+    </details>
+  </div>
+  {% else %}
+  <div class="alert alert-warning">No tickets in {{ group_label }}</div>
+  {% endfor %}
+</div>
+{% endfor %}
 {% else %}
 <div class="alert alert-warning">
   {% if single_client_mode and filter_options.selected_task_types|length == 1 %}
@@ -72,4 +98,4 @@
   No tickets match the current filters
   {% endif %}
 </div>
-{% endfor %}
+{% endif %}

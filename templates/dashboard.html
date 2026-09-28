@@ -281,6 +281,26 @@ body::after{
 }
 .end-date-badge.due-soon{background:#f5c518;color:#5c4600}
 .end-date-badge.overdue{background:#e0392c;color:#fff}
+.end-date-badge.active{background:#0e9f6e;color:#fff}
+/* ---------- Contract group switcher (Ticket Details tab) ---------- */
+.contract-group-tabs{display:flex;gap:6px;margin:12px 0 4px}
+.contract-group-btn{border:1px solid var(--border);background:#fff;color:var(--text);
+  border-radius:8px;padding:7px 16px;font-weight:600;font-size:0.82rem;cursor:pointer}
+.contract-group-btn:hover{border-color:var(--accent);color:var(--accent)}
+.contract-group-btn.active{background:var(--gradient);color:#fff;border-color:transparent;
+  box-shadow:0 2px 8px rgba(44,95,130,0.3)}
+.contract-group{display:none}
+.contract-group.active{display:block}
+.contract-group h3{margin:16px 0 4px}
+/* Status roll-up chips in each contract group's heading */
+.status-count{display:inline-block;margin:0 0 0 8px;padding:2px 10px;border-radius:12px;
+  font-size:0.7rem;font-weight:700;letter-spacing:0.2px;vertical-align:middle;
+  box-shadow:0 1px 2px rgba(0,0,0,0.12)}
+.status-count.pending{background:#fdf3d7;color:#8a6100}
+.status-count.inprogress{background:#e2ecf5;color:#1d4f75}
+.status-count.completed{background:#dff5ec;color:#0b7a56}
+.status-count.closed{background:#e8ecf1;color:#3f4c5a}
+.status-count.other{background:#fde8e6;color:#a1241a}
 .derived-cell{color:var(--text-dim);background:rgba(0,0,0,0.03);cursor:not-allowed}
 .tab-loading{padding:60px 20px;text-align:center;color:var(--text-dim);font-size:0.95rem}
 tr[data-new-row="true"]{background:rgba(44,95,130,0.05)}
@@ -535,6 +555,17 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 /* ---------- Role gate ---------- */
 .admin-only{display:none !important}
 body.role-admin .admin-only{display:inline-flex !important}
+/* Home page's transfer-history panel is a block, not a control, so it
+   needs its own display rule -- the inline-flex rule above would make the
+   whole panel shrink-wrap into one line. */
+.transfer-history.admin-only{display:none !important}
+body.role-admin .transfer-history.admin-only{display:block !important}
+.transfer-history .btn-revert-transfer{
+  padding:4px 12px;background:#8e44ad;color:#fff;border:none;border-radius:6px;
+  font-weight:600;font-size:0.78rem;cursor:pointer;white-space:nowrap;
+}
+.transfer-history .btn-revert-transfer:hover{background:#7d3c98}
+.transfer-history .btn-revert-transfer:disabled{opacity:.5;cursor:default}
 .viewer-only-note{display:block;color:var(--text-dim);font-size:0.82rem;margin-top:10px}
 body.role-admin .viewer-only-note{display:none}
 .role-modal-overlay{
@@ -1074,12 +1105,25 @@ function applyEndDateBadges() {
       badge.className = 'end-date-badge due-soon';
       badge.textContent = 'Due Soon';
     } else {
-      return;
+      badge.className = 'end-date-badge active';
+      badge.textContent = 'Active';
     }
     cell.appendChild(badge);
   });
 }
 document.addEventListener('DOMContentLoaded', applyEndDateBadges);
+
+/* Ticket Details tab: toggle between the "Current Contract" and
+   "Old Contract" groups. Both stay in the DOM (so inline editing can
+   reach every row); only visibility changes. */
+function switchContractGroup(group, btn) {
+  document.querySelectorAll('.contract-group').forEach(function(g) {
+    g.classList.toggle('active', g.id === 'contract-group-' + group);
+  });
+  document.querySelectorAll('.contract-group-btn').forEach(function(b) {
+    b.classList.toggle('active', b === btn);
+  });
+}
 
 function selectClient(name, category, projekName) {
   // Entering (or leaving) a client's page always drops any leftover
@@ -1130,6 +1174,37 @@ function postDeleteRow(dbTable, rowIdx) {
     body: JSON.stringify({table: dbTable, row_idx: rowIdx})
   }).then(function(r) { return r.json(); });
 }
+/* Home page: undo an automatic Development -> Warranty transfer. The
+   server restores Projek Status/Progress Status only if the row still sits
+   in Warranty, so a row that was manually moved on since just has its
+   history entry closed -- the toast says so either way. */
+function postRevertTransfer(historyId) {
+  return fetch('/api/revert_transfer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({history_id: historyId})
+  }).then(function(r) { return r.json(); });
+}
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.btn-revert-transfer');
+  if (!btn) return;
+  var historyId = btn.getAttribute('data-history-id');
+  if (!historyId) return;
+  if (!confirm('Move this project back to Development?')) return;
+  btn.disabled = true;
+  postRevertTransfer(historyId).then(function(result) {
+    if (result.success) {
+      showToast(result.row_restored ? 'Transfer reverted' : 'History cleared -- the row had been changed since the transfer', 'success');
+      setTimeout(function() { window.location.reload(); }, 700);
+    } else {
+      btn.disabled = false;
+      showToast('Revert failed: ' + (result.error || 'unknown'), 'error');
+    }
+  }).catch(function(err) {
+    btn.disabled = false;
+    showToast('Revert failed: ' + err.message, 'error');
+  });
+});
 document.addEventListener('click', function(e) {
   var btn = e.target.closest('.btn-row-action');
   if (!btn) return;
@@ -1834,7 +1909,7 @@ function wireEditTables() {
   if (document.getElementById('editBtn9')) {
     makeEditableMulti('client-table', 'saveBtn9', 'cancelBtn9', 'editBtn9', 'tab-9', {
       btnId: 'addRowBtn9', dbTable: 'clients',
-      columns: ['Client', 'Projek ID', 'Projek Name', 'Projek Status', 'Start Date', 'End Date']
+      columns: ['Client', 'Projek ID', 'Projek Name', 'Projek Status', 'Progress Status', 'Start Date', 'End Date']
     });
   }
 
@@ -3847,6 +3922,9 @@ function doUpload() {
       }
       if (result.unmapped_columns && result.unmapped_columns.length) {
         html += '<div class="row-warn">&#9888; Column(s) not stored (no matching field): ' + escapeHtml(result.unmapped_columns.join(', ')) + '</div>';
+      }
+      if (result.notes && result.notes.length) {
+        result.notes.forEach(function(note) { html += '<div class="row-ok">&#10003; ' + escapeHtml(note) + '</div>'; });
       }
       if (result.errors && result.errors.length) {
         result.errors.forEach(function(err) { html += '<div class="row-err">&#10007; ' + escapeHtml(err) + '</div>'; });
