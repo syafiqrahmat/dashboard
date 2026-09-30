@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from dotenv import load_dotenv
 from flask import Flask, render_template, request, jsonify, send_from_directory, g, session
+from werkzeug.exceptions import RequestEntityTooLarge
 
 load_dotenv()
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env.local"), override=True)
@@ -24,7 +25,8 @@ import db
 import mysupport_sync
 from data_utils import (
     COLORS, PRIORITY_COLORS, AGEING_COLORS,
-    parse_ticket_sheet, parse_project_sheet, parse_client_sheet, detect_ticket_sheets,
+    parse_ticket_sheet, parse_project_sheet, parse_client_sheet, parse_milestone_sheet,
+    detect_ticket_sheets,
 )
 
 app = Flask(
@@ -41,6 +43,15 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 # spin up a fresh process per request, and a random secret would silently
 # invalidate every logged-in session on the next cold start.
 app.secret_key = os.environ.get("SECRET_KEY", "sw-dashboard-session-signing-key-change-me")
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_upload_too_large(e):
+    """Return JSON (not Werkzeug's default HTML error page) when a request
+    body exceeds MAX_CONTENT_LENGTH, so the upload UI can show a readable
+    message instead of a fetch failure or a JSON parse error."""
+    return jsonify({"success": False,
+                    "error": f"File(s) exceed the {MAX_UPLOAD_MB} MB upload limit"}), 413
 
 PROJECT_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
@@ -1962,7 +1973,9 @@ def build_tab_context(idx, filters, filter_options, df=None):
         return "tabs/tab_10.html", common
 
     if idx == 11:
-        cols = [c for c, _ in db.PROJECT_MILESTONE_DB_COLUMNS]
+        # Dedup Seq is re-upload plumbing (see idx_projectmilestone_dedup_key),
+        # not a field anyone edits -- same skip the Project Details tab does.
+        cols = [c for c, _ in db.PROJECT_MILESTONE_DB_COLUMNS if c != "Dedup Seq"]
         try:
             milestone_df = load_milestone_data()
         except Exception as e:
@@ -2055,6 +2068,7 @@ def index():
         default_tab_idx=idx,
         default_tab_html=default_tab_html,
         now=datetime.now().strftime("%d-%m-%Y %H:%M"),
+        max_upload_mb=MAX_UPLOAD_MB,
     )
 
 
@@ -2182,8 +2196,9 @@ def api_upload():
 
     summary = {"files": [], "tickets_inserted": 0, "tickets_updated": 0,
                "projects_inserted": 0, "projects_updated": 0,
-               "clients_inserted": 0, "clients_updated": 0, "errors": [],
-               "rows_dropped": 0, "unmapped_columns": [], "notes": []}
+               "clients_inserted": 0, "clients_updated": 0,
+               "milestones_inserted": 0, "milestones_updated": 0,
+               "errors": [], "rows_dropped": 0, "unmapped_columns": [], "notes": []}
     seen_unmapped = set()
 
     def note_diagnostics(diag):
@@ -2259,6 +2274,20 @@ def api_upload():
             log(f"Upload error on {label}: {e}", "ERROR")
             summary["errors"].append(f"{label}: {str(e)[:300]}")
 
+    def upsert_milestones_safely(parsed_m, label):
+        """Same per-sheet commit/rollback isolation as the ticket helper
+        above -- one bad milestone row fails only its own sheet."""
+        conn = request_conn()
+        try:
+            ins_m, upd_m = db.upsert_project_milestones(parsed_m, conn=conn)
+            conn.commit()
+            summary["milestones_inserted"] += ins_m
+            summary["milestones_updated"] += upd_m
+        except Exception as e:
+            conn.rollback()
+            log(f"Upload error on {label}: {e}", "ERROR")
+            summary["errors"].append(f"{label}: {str(e)[:300]}")
+
     for f in files:
         fname = f.filename
         ext = os.path.splitext(fname)[1].lower()
@@ -2308,6 +2337,22 @@ def api_upload():
                     note_diagnostics({"rows_dropped": diag_c["rows_dropped"], "unmapped_columns": diag_c["unmapped_columns"]})
                     if not parsed_c.empty:
                         upsert_clients_safely(parsed_c, f"{fname} / Client")
+
+                # Matched case-insensitively so a re-titled sheet
+                # ("Project Milestone", trailing space) still lands -- the
+                # same way the other two sheets are looked up by name, but
+                # without being locked to the source workbook's shouting.
+                milestone_sheet = next(
+                    (s for s in xl.sheet_names if str(s).strip().upper() == "PROJECT MILESTONE"),
+                    None,
+                )
+                if milestone_sheet:
+                    buf.seek(0)
+                    mdf = pd.read_excel(buf, sheet_name=milestone_sheet, header=0, engine="openpyxl")
+                    parsed_m, diag_m = parse_milestone_sheet(mdf, source_file=fname)
+                    note_diagnostics(diag_m)
+                    if not parsed_m.empty:
+                        upsert_milestones_safely(parsed_m, f"{fname} / {milestone_sheet}")
 
                 summary["files"].append({"name": fname, "rows_found": rows_found})
 

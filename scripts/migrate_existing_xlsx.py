@@ -22,7 +22,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"))
 import pandas as pd
 
 import db
-from data_utils import detect_ticket_sheets, parse_ticket_sheet, parse_project_sheet, parse_client_sheet
+from data_utils import (
+    detect_ticket_sheets, parse_ticket_sheet, parse_project_sheet,
+    parse_client_sheet, parse_milestone_sheet,
+)
 
 
 def find_default_workbook():
@@ -83,6 +86,20 @@ def main():
         if not parsed_c.empty:
             ins_c, upd_c = db.upsert_clients(parsed_c)
             print(f"  Client: {len(parsed_c)} rows -> {ins_c} inserted, {upd_c} updated{dropped_note}")
+
+    milestone_sheet = next(
+        (s for s in xl.sheet_names if str(s).strip().upper() == "PROJECT MILESTONE"),
+        None,
+    )
+    if milestone_sheet:
+        mdf = pd.read_excel(filepath, sheet_name=milestone_sheet, header=0, engine="openpyxl")
+        parsed_m, diag_m = parse_milestone_sheet(mdf, source_file=fname)
+        if diag_m["unmapped_columns"]:
+            print(f"  {milestone_sheet}: columns not stored: {diag_m['unmapped_columns']}")
+        if not parsed_m.empty:
+            ins_m, upd_m = db.upsert_project_milestones(parsed_m)
+            dropped_note = f", {diag_m['rows_dropped']} row(s) skipped (no Task Name)" if diag_m["rows_dropped"] else ""
+            print(f"  {milestone_sheet}: {len(parsed_m)} rows -> {ins_m} inserted, {upd_m} updated{dropped_note}")
 
     print(f"\nDone. Tickets: {total_ins} inserted, {total_upd} updated.")
     counts = db.get_counts()

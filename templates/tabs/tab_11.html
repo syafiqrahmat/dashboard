@@ -4,7 +4,8 @@
    td carries data-col with the display column name, every tr carries
    data-row-idx + data-sheet="Milestone" so /api/save knows which row and
    which column map to update. The trailing badge cell is not a column --
-   applyEndDateBadges() fills it from data-end-date on load. #}
+   applyEndDateBadges() fills it from the row's Progress cell: >= 100% "Completed",
+   <= 0% "Not Started", otherwise "In Progress" (blank Progress shows no badge). #}
 <div class="chart-full">
   <div class="edit-bar" style="margin-bottom:4px">
     <span style="flex:1"></span>

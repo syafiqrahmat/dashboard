@@ -282,6 +282,9 @@ body::after{
 .end-date-badge.due-soon{background:#f5c518;color:#5c4600}
 .end-date-badge.overdue{background:#e0392c;color:#fff}
 .end-date-badge.active{background:#0e9f6e;color:#fff}
+.end-date-badge.completed{background:#0e9f6e;color:#fff}
+.end-date-badge.in-progress{background:#2563eb;color:#fff}
+.end-date-badge.not-started{background:#64748b;color:#fff}
 /* ---------- Contract group switcher (Ticket Details tab) ---------- */
 .contract-group-tabs{display:flex;gap:6px;margin:12px 0 4px}
 .contract-group-btn{border:1px solid var(--border);background:#fff;color:var(--text);
@@ -756,7 +759,7 @@ body.role-admin .viewer-only-note{display:none}
     <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
       <div class="icon">&#128193;</div>
       <div class="dz-title">Click to browse or drag a file here</div>
-      <div class="dz-sub">.csv, .xlsx, .xls &middot; up to 25&nbsp;MB</div>
+      <div class="dz-sub">.csv, .xlsx, .xls &middot; up to {{ max_upload_mb }}&nbsp;MB</div>
       <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" multiple style="display:none">
     </div>
     <div class="control-group" id="csvClientGroup" style="display:none;margin-top:14px">
@@ -1008,6 +1011,7 @@ function refreshWithSplash() {
 /* ---------- Role gate (admin login vs viewer, backed by a real signed
    server session, not a client cookie the browser could just edit) ---------- */
 var SW_USER_ROLE = {{ user_role|tojson }};
+var MAX_UPLOAD_MB = {{ max_upload_mb }};
 
 function syncRoleLabel() {
   var label = document.getElementById('roleSwitchLabel');
@@ -1104,11 +1108,17 @@ function toggleSidebar() {
 })();
 /* ---------- End Date badge (Overall Client tab) ----------
    Flags rows whose End Date is within the next month (yellow "Due Soon")
-   or already in the past (red "Overdue"), rendered into the row's own
+   or    already in the past (red "Expired"), rendered into the row's own
    trailing badge cell so it always lands at the end of the row rather
    than wherever the End Date column happens to sit. Runs after render
    since the dates are baked into the table as plain dd/mm/yyyy text
-   server-side. */
+   server-side.
+
+   Milestone rows (tr[data-sheet="Milestone"], tab 11) are different:
+   their badge is derived from the Progress cell instead of the date --
+   >= 100% "Completed", <= 0% "Not Started", anything else "In Progress"
+   (uppercased by the badge's CSS). Blank/unparseable Progress renders
+   no badge at all. */
 function applyEndDateBadges() {
   var cells = document.querySelectorAll('.end-date-badge-cell');
   if (!cells.length) return;
@@ -1117,6 +1127,30 @@ function applyEndDateBadges() {
   var SOON_DAYS = 30;
   cells.forEach(function(cell) {
     cell.innerHTML = '';
+    var tr = cell.closest('tr');
+    if (tr && tr.getAttribute('data-sheet') === 'Milestone') {
+      var progCell = tr.querySelector('td[data-col="Progress"]');
+      var raw = '';
+      if (progCell) {
+        var progInput = progCell.querySelector('input, select');
+        raw = progInput ? progInput.value : progCell.textContent;
+      }
+      var pct = parseFloat(String(raw || '').replace('%', '').trim());
+      if (isNaN(pct)) return;
+      var badge = document.createElement('span');
+      if (pct >= 100) {
+        badge.className = 'end-date-badge completed';
+        badge.textContent = 'Completed';
+      } else if (pct <= 0) {
+        badge.className = 'end-date-badge not-started';
+        badge.textContent = 'Not Started';
+      } else {
+        badge.className = 'end-date-badge in-progress';
+        badge.textContent = 'In Progress';
+      }
+      cell.appendChild(badge);
+      return;
+    }
     var text = (cell.getAttribute('data-end-date') || '').trim();
     var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
     if (!m) return;
@@ -1499,6 +1533,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
       inputs.forEach(function(inp) {
         revertEditableCellToText(inp.parentNode, inp);
       });
+      applyEndDateBadges();
     }
   }
 
@@ -3998,6 +4033,18 @@ dropzone.addEventListener('drop', function(e) {
 
 function doUpload() {
   if (selectedFiles.length === 0) return;
+
+  // Block oversized payloads before any bytes leave the browser -- the
+  // server rejects bodies over MAX_CONTENT_LENGTH while they are still
+  // streaming, which the browser reports as a bare "Failed to fetch".
+  var totalBytes = selectedFiles.reduce(function(n, f) { return n + f.size; }, 0);
+  if (totalBytes > MAX_UPLOAD_MB * 1024 * 1024) {
+    document.getElementById('uploadResult').innerHTML =
+      '<div class="row-err">&#10007; Total size exceeds ' + MAX_UPLOAD_MB +
+      ' MB (' + (totalBytes / 1024 / 1024).toFixed(1) + ' MB selected) — remove some files</div>';
+    return;
+  }
+
   var fd = new FormData();
   selectedFiles.forEach(function(f) { fd.append('file', f); });
   var clientName = document.getElementById('csvClientName').value.trim();
@@ -4008,14 +4055,30 @@ function doUpload() {
   document.getElementById('uploadResult').innerHTML = '';
 
   fetch('/api/upload', { method: 'POST', body: fd })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      return r.text().then(function(t) {
+        var res;
+        try { res = JSON.parse(t); }
+        catch (e) { throw new Error('Server returned a non-JSON response (HTTP ' + r.status + ')'); }
+        if (!r.ok && !res.error && !(res.errors || []).length) {
+          res.error = 'HTTP ' + r.status + (r.statusText ? ' ' + r.statusText : '');
+        }
+        return res;
+      });
+    })
     .then(function(result) {
       document.getElementById('uploadProgress').style.display = 'none';
       var html = '';
-      if (result.success || result.tickets_inserted || result.tickets_updated || result.projects_inserted || result.projects_updated) {
+      if (result.error) {
+        html += '<div class="row-err">&#10007; ' + escapeHtml(result.error) + '</div>';
+      }
+      if (result.success || result.tickets_inserted || result.tickets_updated || result.projects_inserted || result.projects_updated || result.milestones_inserted || result.milestones_updated) {
         html += '<div class="row-ok">&#10003; ' + result.tickets_inserted + ' new ticket(s), ' + result.tickets_updated + ' updated';
         if (result.projects_inserted || result.projects_updated) {
           html += ' &middot; ' + result.projects_inserted + ' new project row(s), ' + result.projects_updated + ' updated';
+        }
+        if (result.milestones_inserted || result.milestones_updated) {
+          html += ' &middot; ' + result.milestones_inserted + ' new milestone(s), ' + result.milestones_updated + ' updated';
         }
         html += '</div>';
       }
@@ -4042,7 +4105,10 @@ function doUpload() {
     })
     .catch(function(e) {
       document.getElementById('uploadProgress').style.display = 'none';
-      document.getElementById('uploadResult').innerHTML = '<div class="row-err">Upload failed: ' + escapeHtml(e.message) + '</div>';
+      var msg = (e.message === 'Failed to fetch')
+        ? 'Cannot reach the server at ' + window.location.host + ' — is python api/index.py running?'
+        : e.message;
+      document.getElementById('uploadResult').innerHTML = '<div class="row-err">Upload failed: ' + escapeHtml(msg) + '</div>';
       document.getElementById('uploadSubmitBtn').disabled = false;
     });
 }
