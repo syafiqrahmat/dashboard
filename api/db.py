@@ -86,6 +86,9 @@ CLIENT_DB_COLUMNS = [
 # Display label -> column for the projectmilestone table. The labels are the
 # field names the table was specified with (Projectname, Startdate, ...);
 # the columns themselves stay snake_case like every other table here.
+# "Dedup Seq" is plumbing for the re-upload key (see idx_projectmilestone_
+# dedup_key), not a user-facing field -- the Milestones tab filters it out
+# of its column list, exactly like the Project Details tab does.
 PROJECT_MILESTONE_DB_COLUMNS = [
     ("Client", "client"),
     ("Projectname", "project_name"),
@@ -94,6 +97,7 @@ PROJECT_MILESTONE_DB_COLUMNS = [
     ("Startdate", "start_date"),
     ("Enddate", "end_date"),
     ("Progress", "progress"),
+    ("Dedup Seq", "dedup_seq"),
 ]
 
 SCHEMA_SQL = """
@@ -312,6 +316,24 @@ CREATE TABLE IF NOT EXISTS projectmilestone (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projectmilestone_client ON projectmilestone(client);
+
+-- Same NULL-safe dedup pattern as idx_projects_dedup_key below: a plain
+-- UNIQUE constraint can never match ON CONFLICT while any key column is
+-- NULL (SQL NULL != NULL), so COALESCE turns every key part into a real
+-- comparable value. Deliberately keyed on (client, project, task) and NOT
+-- on the dates: milestone dates shift constantly as a rollout plan slips,
+-- and a date in the key would turn every shifted re-upload into a second
+-- copy of the task instead of an update. dedup_seq disambiguates two
+-- otherwise-identical rows (the same task name listed twice in one
+-- project), counting occurrences the same way projects does.
+ALTER TABLE projectmilestone ADD COLUMN IF NOT EXISTS dedup_seq INTEGER NOT NULL DEFAULT 0;
+DROP INDEX IF EXISTS idx_projectmilestone_dedup_key;
+CREATE UNIQUE INDEX idx_projectmilestone_dedup_key ON projectmilestone (
+    COALESCE(client, ''),
+    COALESCE(project_name, ''),
+    COALESCE(task_name, ''),
+    dedup_seq
+);
 """
 
 
@@ -1166,15 +1188,64 @@ def insert_client_row(db_values, conn=None):
             return cur.fetchone()[0]
 
 
+def upsert_project_milestones(df, conn=None):
+    """Insert new milestone rows / update existing ones (matched by client +
+    project + task, with dedup_seq counting same-key repeats) so re-uploading
+    the PROJECT MILESTONE sheet refreshes dates/progress in place instead of
+    appending a second copy of every task.
+
+    Returns (inserted_count, updated_count).
+    """
+    if df.empty:
+        return 0, 0
+
+    if "Dedup Seq" not in df.columns:
+        df = df.copy()
+        df["Dedup Seq"] = 0
+
+    records = _records_for_insert(df, PROJECT_MILESTONE_DB_COLUMNS)
+    db_cols = [c for _, c in PROJECT_MILESTONE_DB_COLUMNS]
+    key_cols = ("client", "project_name", "task_name", "dedup_seq")
+    update_cols = [c for c in db_cols if c not in key_cols]
+    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+
+    # Must match idx_projectmilestone_dedup_key's expressions exactly for
+    # Postgres to recognize it as the ON CONFLICT target.
+    sql = f"""
+        INSERT INTO projectmilestone ({', '.join(db_cols)})
+        VALUES %s
+        ON CONFLICT (
+            COALESCE(client, ''),
+            COALESCE(project_name, ''),
+            COALESCE(task_name, ''),
+            dedup_seq
+        ) DO UPDATE SET
+            {set_clause},
+            updated_at = now()
+        RETURNING (xmax = 0) AS inserted
+    """
+
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            results = psycopg2.extras.execute_values(cur, sql, records, page_size=500, fetch=True)
+
+    inserted = sum(1 for r in results if r[0])
+    updated = len(results) - inserted
+    return inserted, updated
+
+
 def fetch_project_milestone_df(conn=None):
     """Milestones as a dataframe shaped exactly like fetch_clients_df():
     an _row_idx (the table's id) plus the display column names, with the
     two date columns parsed to datetime so callers can format them."""
     db_cols = [c for _, c in PROJECT_MILESTONE_DB_COLUMNS]
     display_cols = [c for c, _ in PROJECT_MILESTONE_DB_COLUMNS]
+    # start_date (not task_name) is the ordering key: the sheet lists a
+    # project's tasks in rollout order (Kick-off -> ... -> GoLive), and
+    # alphabetical-by-task would put "Development" before "Kick-off".
     sql = (
         f"SELECT id, {', '.join(db_cols)} FROM projectmilestone "
-        "ORDER BY client, project_name, task_name, id"
+        "ORDER BY client, project_name, start_date NULLS LAST, id"
     )
 
     with db_connection(conn) as c:
@@ -1194,19 +1265,32 @@ def fetch_project_milestone_df(conn=None):
 
 
 def insert_project_milestone_row(db_values, conn=None):
-    values = _clean_insert_values(db_values, {c for _, c in PROJECT_MILESTONE_DB_COLUMNS})
+    values = _clean_insert_values(
+        db_values, {c for _, c in PROJECT_MILESTONE_DB_COLUMNS} - {"dedup_seq"}
+    )
     if not values.get("client"):
         raise ValueError("Client is required")
     if not values.get("task_name"):
         raise ValueError("Taskname is required")
     with db_connection(conn) as c:
         with c.cursor() as cur:
+            # Mirrors idx_projectmilestone_dedup_key: dedup_seq is "how many
+            # rows already share this key," so a lone hand-typed row lands on
+            # the next free slot instead of violating the unique index.
+            cur.execute(
+                """SELECT COUNT(*) FROM projectmilestone
+                   WHERE COALESCE(client,'') = COALESCE(%s,'')
+                     AND COALESCE(project_name,'') = COALESCE(%s,'')
+                     AND COALESCE(task_name,'') = COALESCE(%s,'')""",
+                (values.get("client"), values.get("project_name"), values.get("task_name")),
+            )
+            dedup_seq = cur.fetchone()[0]
             cols = list(values.keys())
-            col_list = ", ".join(cols)
-            placeholders = ", ".join(["%s"] * len(cols))
+            col_list = ", ".join(cols + ["dedup_seq"])
+            placeholders = ", ".join(["%s"] * (len(cols) + 1))
             cur.execute(
                 f"INSERT INTO projectmilestone ({col_list}) VALUES ({placeholders}) RETURNING id",
-                [values[c] for c in cols],
+                [values[c] for c in cols] + [dedup_seq],
             )
             return cur.fetchone()[0]
 

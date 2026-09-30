@@ -110,6 +110,13 @@ CLIENT_COLUMNS = [
     "Start Date", "End Date", "Technology", "Source File",
 ]
 
+# Display labels for the projectmilestone table -- must stay in the same
+# order as PROJECT_MILESTONE_DB_COLUMNS in db.py, since the Milestones tab
+# and its add-row contract both derive their column order from it.
+MILESTONE_COLUMNS = [
+    "Client", "Projectname", "Taskname", "Duration", "Startdate", "Enddate", "Progress",
+]
+
 
 def standardize_columns(df):
     col_map = {}
@@ -496,6 +503,118 @@ def parse_client_sheet(df, source_file):
             df[col] = None
 
     return df[CLIENT_COLUMNS], {"rows_dropped": rows_dropped, "unmapped_columns": unmapped_columns}
+
+
+def parse_milestone_sheet(df, source_file):
+    """Standardize the workbook's 'PROJECT MILESTONE' sheet.
+
+    One row per task of a project's rollout plan (Kick-off ... GoLive).
+    Returns (parsed_df, info) using the same diagnostics shape as the
+    ticket/project/client parsers so the upload UI reports what got left
+    behind instead of silently dropping columns.
+    """
+    df = df.dropna(how="all").copy()
+
+    # The task column's header carries a project-specific suffix
+    # ("Task Name - LKTN ENH") -- it names whichever project the sheet
+    # was originally built for, but every later project's rows live under
+    # it too, so match on the prefix rather than an exact string. Same
+    # for the other headers' date/casing variants.
+    rename_map = {}
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if cl == "client":
+            rename_map[c] = "Client"
+        elif cl.replace(" ", "") in ("projectname",):
+            rename_map[c] = "Projectname"
+        elif cl.startswith("task name") or cl.replace(" ", "") in ("taskname",):
+            rename_map[c] = "Taskname"
+        elif cl == "duration":
+            rename_map[c] = "Duration"
+        elif cl.replace(" ", "") in ("startdate",):
+            rename_map[c] = "Startdate"
+        elif cl.replace(" ", "") in ("enddate"):
+            rename_map[c] = "Enddate"
+        elif cl == "progress":
+            rename_map[c] = "Progress"
+    df = df.rename(columns=rename_map)
+
+    if "Client" in df.columns:
+        df["Client"] = df["Client"].ffill()
+        df["Client"] = df["Client"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+        df.loc[df["Client"].isin(["", "nan", "None"]), "Client"] = None
+
+    for c in ("Projectname", "Taskname"):
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+            df.loc[df[c].isin(["", "nan", "None"]), c] = None
+
+    for c in ("Startdate", "Enddate"):
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce", dayfirst=True)
+
+    # Duration is a day count in the sheet (1, 62, 101) but the column is
+    # TEXT -- store the plain integer as text, and pass free-text entries
+    # ("5 days") through untouched. Same "no fake precision" rule the
+    # projects.duration column follows.
+    if "Duration" in df.columns:
+        dur = pd.to_numeric(df["Duration"], errors="coerce")
+        as_str = dur.round().astype("Int64").astype(str)
+        as_str = as_str.str.replace("<NA>", "", regex=False)
+        free_text = df["Duration"].astype(str).str.strip()
+        df["Duration"] = as_str.where(dur.notna(), free_text)
+        df.loc[df["Duration"].isin(["", "nan", "None"]), "Duration"] = None
+
+    # The sheet stores Progress as a 0-1 fraction (0.9) because the cells
+    # are Excel percentage-formatted -- but this column is free text shown
+    # in the Milestones tab, where "0.9" reads as a typo next to the
+    # projects table's percentages. Scale to a "90%" label here, at the
+    # only place data enters, so the tab needs no display-side logic.
+    if "Progress" in df.columns:
+        frac = pd.to_numeric(
+            df["Progress"].astype(str).str.replace("%", "", regex=False), errors="coerce"
+        )
+        pct = frac.apply(lambda v: round(v * 100) if pd.notna(v) and v <= 1 else (round(v) if pd.notna(v) else None))
+        label = pct.apply(lambda v: f"{v}%" if v is not None else None)
+        free_progress = df["Progress"].astype(str).str.strip()
+        df["Progress"] = label.where(frac.notna(), free_progress)
+        df.loc[df["Progress"].isin(["", "nan", "None"]), "Progress"] = None
+
+    # A row with no Taskname is a section separator or leftover padding
+    # (the sheet has blank rows between projects) -- nothing to key an
+    # upsert on, so count it as dropped rather than inserting an empty row.
+    rows_dropped = 0
+    if "Taskname" in df.columns:
+        valid = df["Taskname"].notna()
+        rows_dropped = int((~valid).sum())
+        df = df[valid]
+    else:
+        rows_dropped = len(df)
+        df = df.iloc[0:0]
+
+    # Same occurrence-counter trick as parse_project_sheet: the dedup key
+    # (client, project, task) can't distinguish a task genuinely listed
+    # twice in one project, and SQL NULL keys would never match anyway.
+    # Counting duplicates in sheet order gives each repeat a stable
+    # sequence number, so a re-upload updates in place instead of
+    # appending a second copy.
+    if not df.empty:
+        key_basis = df[["Client", "Projectname", "Taskname"]]
+        df["Dedup Seq"] = key_basis.astype(str).groupby(list(key_basis.columns)).cumcount()
+    else:
+        df["Dedup Seq"] = pd.Series(dtype=int)
+
+    unmapped_columns = [
+        c for c in df.columns
+        if c not in MILESTONE_COLUMNS and c != "Dedup Seq"
+        and not str(c).startswith("Unnamed")
+    ]
+
+    for col in MILESTONE_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+
+    return df[MILESTONE_COLUMNS], {"rows_dropped": rows_dropped, "unmapped_columns": unmapped_columns}
 
 
 def detect_ticket_sheets(filepath_or_buffer):
