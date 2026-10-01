@@ -15,7 +15,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify, send_from_directory, g, session
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, g, session
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font
 from werkzeug.exceptions import RequestEntityTooLarge
 
 load_dotenv()
@@ -26,7 +28,7 @@ import mysupport_sync
 from data_utils import (
     COLORS, PRIORITY_COLORS, AGEING_COLORS,
     parse_ticket_sheet, parse_project_sheet, parse_client_sheet, parse_milestone_sheet,
-    detect_ticket_sheets,
+    parse_task_detail_sheet, detect_ticket_sheets,
 )
 
 app = Flask(
@@ -121,6 +123,16 @@ TICKET_DB_COL_BY_DISPLAY = {display: col for display, col in db.TICKET_DB_COLUMN
 CLIENT_DB_COL_BY_DISPLAY = {display: col for display, col in db.CLIENT_DB_COLUMNS}
 PROJECT_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_DB_COLUMNS}
 MILESTONE_DB_COL_BY_DISPLAY = {display: col for display, col in db.PROJECT_MILESTONE_DB_COLUMNS}
+TASK_DETAIL_DB_COL_BY_DISPLAY = {display: col for display, col in db.TASK_DETAIL_DB_COLUMNS}
+
+# Source workbooks live next to this module (api/*.xlsx), while templates and
+# static assets live one level up (PROJECT_ROOT, defined below). Resolving a
+# workbook name against both keeps source_file -- which the upload stores as a
+# bare filename -- usable no matter which directory the app was started from.
+SOURCE_WORKBOOK_DIRS = (
+    os.path.dirname(os.path.abspath(__file__)),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."),
+)
 
 _schema_ready = False
 
@@ -159,6 +171,50 @@ def ensure_schema():
         return
     db.init_schema(conn=request_conn())
     _schema_ready = True
+
+
+def lookup_client_for_project(projek_name, parsed_client_df=None):
+    """Which client owns this project, for tagging a '<project> TASK DETAIL'
+    sheet (which carries no Client column of its own).
+
+    Prefers the Client sheet of the workbook being uploaded -- it is already
+    parsed at that point and is the newest statement of the mapping -- and
+    falls back to the clients table so the sheet still lands when the
+    workbook omits a Client tab or the project was registered earlier.
+    """
+    if parsed_client_df is not None and not parsed_client_df.empty and "Projek Name" in parsed_client_df.columns:
+        names = parsed_client_df["Projek Name"].astype(str).str.strip()
+        hit = parsed_client_df.loc[names == projek_name, "Client"]
+        if len(hit):
+            value = str(hit.iloc[0]).strip()
+            if value and value.lower() not in ("nan", "none"):
+                return value
+    try:
+        value = db.find_client_for_project(projek_name, conn=request_conn())
+        if value:
+            return value
+    except Exception as e:
+        log(f"Client lookup failed for {projek_name}: {e}", "ERROR")
+    return None
+
+
+def resolve_source_workbook(source_file):
+    """Absolute path of the workbook a source_file value refers to, or None.
+
+    source_file is stored as whatever the upload was named, so a rename
+    between uploads would make the path unresolvable -- the Excel buttons
+    report that rather than guessing a different file to overwrite.
+    """
+    if not source_file:
+        return None
+    candidate = os.path.normpath(source_file)
+    if os.path.isabs(candidate):
+        return candidate if os.path.isfile(candidate) else None
+    for base in SOURCE_WORKBOOK_DIRS:
+        path = os.path.normpath(os.path.join(base, candidate))
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def parse_filters(args):
@@ -2009,6 +2065,61 @@ def build_tab_context(idx, filters, filter_options, df=None):
             },
         )
 
+    if idx == 12:
+        # The Task Detail tab: one row per process line of a
+        # "<project> TASK DETAIL" sheet, grouped into modules. Scoped by the
+        # same ?client= / ?projek_name= every other tab narrows on, so the
+        # sidebar button only ever shows this project's rows.
+        cols = db.TASK_DETAIL_COLUMNS
+        try:
+            task_df = db.fetch_project_task_detail_df(
+                clients=filters["clients"] or None,
+                projek_name=filters.get("projek_name"),
+                conn=request_conn(),
+            )
+        except Exception as e:
+            log(f"DB error loading task detail: {e}", "ERROR")
+            task_df = pd.DataFrame()
+        if task_df.empty:
+            task_df = pd.DataFrame(columns=["_row_idx"] + cols)
+
+        detail = task_df[["_row_idx"] + [c for c in cols if c in task_df.columns]].copy()
+        if "Target Date" in detail.columns and detail["Target Date"].notna().any():
+            # dd/mm/yyyy, the format buildEditableCellInput's ddmmyyyyToIso
+            # expects so the date input picks the value up on edit.
+            detail["Target Date"] = detail["Target Date"].dt.strftime("%d/%m/%Y")
+        if "Percentage" in detail.columns:
+            detail["Percentage"] = detail["Percentage"].map(
+                lambda v: f"{v:g}%" if pd.notna(v) else ""
+            )
+        # astype(object) first: a fillna("") on an Int64/float column would
+        # try to cast the string and raise.
+        detail = detail.astype(object).where(detail.notna(), "")
+
+        rows = detail.to_dict("records")
+        # Consecutive rows sharing a No/Modul form one module block -- the
+        # template draws a band per block instead of repeating 55 labels.
+        modules, seen = [], set()
+        for row in rows:
+            key = (row.get("No", ""), row.get("Modul", ""))
+            if key not in seen:
+                seen.add(key)
+                modules.append({"no": row.get("No", ""), "modul": row.get("Modul", ""), "rows": []})
+            modules[-1]["rows"].append(row)
+
+        return (
+            "tabs/tab_12.html",
+            {
+                **common,
+                "task_detail_cols": [c for c in cols if c in detail.columns],
+                "task_detail_rows": rows,
+                "task_detail_modules": modules,
+                # The dedup-key columns: shown for context, kept read-only
+                # so an edit can't collide with idx_ptd_dedup_key.
+                "task_detail_readonly_cols": ["No", "Modul", "Proses"],
+            },
+        )
+
     raise ValueError(f"Unknown tab index: {idx}")
 
 
@@ -2051,6 +2162,20 @@ def index():
         "counts": counts,
     }
 
+    # The sidebar only advertises Task Detail when the current scope has
+    # rows -- a bare EXISTS, so no project other than the one with a
+    # "<project> TASK DETAIL" sheet gets a button that opens an empty tab.
+    # load_data() above has already run ensure_schema().
+    try:
+        has_task_detail = db.has_task_detail(
+            clients=filters["clients"] or None,
+            projek_name=filters.get("projek_name"),
+            conn=request_conn(),
+        )
+    except Exception as e:
+        log(f"DB error checking task detail: {e}", "ERROR")
+        has_task_detail = False
+
     # Only the tab that would be "active" by default is computed/rendered
     # here -- every other tab is fetched lazily by the browser (see
     # /api/tab/<idx> below and switchTab() in dashboard.html) the first
@@ -2067,6 +2192,7 @@ def index():
         filter_options=filter_options,
         default_tab_idx=idx,
         default_tab_html=default_tab_html,
+        has_task_detail=has_task_detail,
         now=datetime.now().strftime("%d-%m-%Y %H:%M"),
         max_upload_mb=MAX_UPLOAD_MB,
     )
@@ -2074,7 +2200,7 @@ def index():
 
 @app.route("/api/tab/<int:idx>")
 def api_tab(idx):
-    if idx < 0 or idx > 11:
+    if idx < 0 or idx > 12:
         return "Not found", 404
     filters = parse_filters(request.args)
     filter_options = build_filter_options(filters)
@@ -2198,6 +2324,7 @@ def api_upload():
                "projects_inserted": 0, "projects_updated": 0,
                "clients_inserted": 0, "clients_updated": 0,
                "milestones_inserted": 0, "milestones_updated": 0,
+               "task_details_inserted": 0, "task_details_updated": 0,
                "errors": [], "rows_dropped": 0, "unmapped_columns": [], "notes": []}
     seen_unmapped = set()
 
@@ -2288,10 +2415,27 @@ def api_upload():
             log(f"Upload error on {label}: {e}", "ERROR")
             summary["errors"].append(f"{label}: {str(e)[:300]}")
 
+    def upsert_task_details_safely(parsed_t, label):
+        """Same per-sheet commit/rollback isolation as the other helpers
+        above -- one bad task-detail row fails only its own sheet."""
+        conn = request_conn()
+        try:
+            ins_t, upd_t = db.upsert_project_task_details(parsed_t, conn=conn)
+            conn.commit()
+            summary["task_details_inserted"] += ins_t
+            summary["task_details_updated"] += upd_t
+        except Exception as e:
+            conn.rollback()
+            log(f"Upload error on {label}: {e}", "ERROR")
+            summary["errors"].append(f"{label}: {str(e)[:300]}")
+
     for f in files:
         fname = f.filename
         ext = os.path.splitext(fname)[1].lower()
         raw = f.read()
+        # Reset per file: otherwise a workbook without a Client sheet would
+        # reuse the previous file's client mapping for its TASK DETAIL sheet.
+        parsed_c = None
         try:
             if ext == ".csv":
                 df = pd.read_csv(io.BytesIO(raw))
@@ -2353,6 +2497,34 @@ def api_upload():
                     note_diagnostics(diag_m)
                     if not parsed_m.empty:
                         upsert_milestones_safely(parsed_m, f"{fname} / {milestone_sheet}")
+
+                # "<project> TASK DETAIL": the sheet has no Client/Projek Name
+                # column, so both are derived -- projek_name by stripping the
+                # suffix, client by looking the project up in the Client sheet
+                # of this same file (the clients table as fallback). Matched
+                # case-insensitively so a re-titled sheet still lands, the same
+                # way PROJECT MILESTONE is looked up above.
+                task_sheet = next(
+                    (s for s in xl.sheet_names if str(s).strip().upper().endswith(" TASK DETAIL")),
+                    None,
+                )
+                if task_sheet:
+                    projek_name = re.sub(
+                        r"\s+TASK DETAIL\s*$", "", str(task_sheet).strip(), flags=re.IGNORECASE
+                    ).strip()
+                    client = lookup_client_for_project(projek_name, parsed_c)
+                    if not client:
+                        summary["notes"].append(
+                            f'{fname} / {task_sheet}: no client found for project "{projek_name}" -- '
+                            "add the project to the Client sheet and re-upload"
+                        )
+                    else:
+                        buf.seek(0)
+                        tdf = pd.read_excel(buf, sheet_name=task_sheet, header=0, engine="openpyxl")
+                        parsed_t, diag_t = parse_task_detail_sheet(tdf, fname, client, projek_name)
+                        note_diagnostics(diag_t)
+                        if not parsed_t.empty:
+                            upsert_task_details_safely(parsed_t, f"{fname} / {task_sheet}")
 
                 summary["files"].append({"name": fname, "rows_found": rows_found})
 
@@ -2496,6 +2668,22 @@ def api_save():
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    if sheet == "Task Detail":
+        # Must come before the ticket fall-through below: an unmatched sheet
+        # would otherwise be treated as a ticket table and silently miss.
+        db_column = TASK_DETAIL_DB_COL_BY_DISPLAY.get(column)
+        if not db_column:
+            return {"success": False, "error": f"Column not editable: {column}"}
+        try:
+            db.update_project_task_detail_field(int(row_idx), db_column, value, conn=request_conn())
+            return {"success": True}
+        except Exception as e:
+            # Roll back here rather than leaving it to teardown: a rejected
+            # UPDATE (e.g. a percentage out of range) aborts the transaction,
+            # and the next statement on this shared connection would fail.
+            request_conn().rollback()
+            return {"success": False, "error": str(e)}
+
     db_column = TICKET_DB_COL_BY_DISPLAY.get(column)
     if not db_column:
         return {"success": False, "error": f"Column not editable: {column}"}
@@ -2505,6 +2693,225 @@ def api_save():
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def _task_detail_scope():
+    """(clients, projek_name) the Task Detail tab is filtered to -- taken
+    from the query string both Excel routes are called with, so an export
+    never contains another project's rows."""
+    filters = parse_filters(request.args)
+    return filters["clients"] or None, filters.get("projek_name")
+
+
+def _task_detail_export_values(row, headers):
+    """One dataframe row -> the cell values the source sheet stores.
+
+    Percentage is written as an 0-1 fraction with a 0% number format, which
+    is how Excel's own percentage format represents 50% -- matching the
+    source means a re-upload of the file round-trips through
+    data_utils._scale_percentage back to 50 instead of 0.5.
+    """
+    values = []
+    for c in headers:
+        v = row.get(c) if hasattr(row, "get") else row[c]
+        if v is None or (not isinstance(v, str) and pd.isna(v)):
+            values.append(None)
+        elif c == "No":
+            values.append(int(v))
+        elif c == "Percentage":
+            values.append(float(v) / 100.0)
+        else:
+            values.append(v)
+    return values
+
+
+def _style_task_detail_header(ws, headers):
+    for i, header in enumerate(headers, start=1):
+        ws.cell(row=1, column=i, value=header).font = Font(bold=True)
+
+
+def _fill_task_detail_header(ws, headers):
+    """Keep the sheet's own header text on row 1, filling only blanks.
+
+    Used by Save to Excel: the source header is authoritative (it may label
+    things differently than the app does), so a write-back must not rename
+    columns out from under a human's existing layout.
+    """
+    for i, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=i)
+        if cell.value in (None, ""):
+            cell.value = header
+        cell.font = Font(bold=True)
+
+
+def _style_task_detail_row(ws, row_number, headers, date_format="DD/MM/YYYY"):
+    """Number formats for the row just written: a bare 0.5 should read as
+    50%, and a date cell should read the way the source/target formats it.
+
+    `date_format` differs per caller on purpose: the download gets the
+    unambiguous format the tab shows, while Save to Excel keeps the source
+    sheet's own `mm-dd-yy` so a write-back doesn't reformat someone's file.
+    """
+    for i, header in enumerate(headers, start=1):
+        cell = ws.cell(row=row_number, column=i)
+        if header == "Percentage" and isinstance(cell.value, (int, float)):
+            cell.number_format = "0.00%"
+        elif header == "Target Date" and cell.value is not None:
+            cell.number_format = date_format
+        elif header == "Definisi":
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+
+@app.route("/api/task_detail/export")
+def api_task_detail_export():
+    """Download the scoped task-detail rows as a fresh .xlsx.
+
+    Unlike save_to_excel this never touches a file on disk, so it works
+    anywhere (including Vercel) and can't collide with a workbook someone
+    has open in Excel.
+    """
+    ensure_schema()
+    clients, projek_name = _task_detail_scope()
+    headers = db.TASK_DETAIL_COLUMNS
+    try:
+        df = db.fetch_task_detail_for_export(
+            clients=clients, projek_name=projek_name, conn=request_conn()
+        )
+    except Exception as e:
+        log(f"Task detail export error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if df.empty:
+        return jsonify({"success": False, "error": "No task detail rows to export"}), 404
+
+    wb = Workbook()
+    ws = wb.active
+    # Excel caps sheet names at 31 chars and bans :\\/?*[]. Keep the source
+    # sheet's "TASK DETAIL" suffix so a re-upload of the download matches.
+    ws.title = re.sub(r"[:\\/?*\[\]]", " ", f"{projek_name or 'Task Detail'} TASK DETAIL")[:31]
+    _style_task_detail_header(ws, headers)
+    for _, row in df.iterrows():
+        ws.append(_task_detail_export_values(row, headers))
+        _style_task_detail_row(ws, ws.max_row, headers)
+    for i, header in enumerate(headers, start=1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = max(12, len(header) + 4)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    label = (projek_name or "task-detail").strip() or "task-detail"
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f"{label} TASK DETAIL.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/task_detail/save_to_excel", methods=["POST"])
+def api_task_detail_save_to_excel():
+    """Write the current task-detail rows back into their source sheet.
+
+    The database is the source of truth after an edit, so this rewrites the
+    sheet's data region wholesale rather than patching cells: module groups
+    are rebuilt from the rows (with the blank separator line the source has
+    between modules), column A is re-merged across each multi-row group, and
+    everything above row 1 -- header, column widths, the other nine sheets --
+    is left alone.
+    """
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    ensure_schema()
+
+    clients, projek_name = _task_detail_scope()
+    headers = db.TASK_DETAIL_COLUMNS
+    try:
+        df = db.fetch_task_detail_for_export(
+            clients=clients, projek_name=projek_name, conn=request_conn()
+        )
+    except Exception as e:
+        log(f"Task detail load error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if df.empty:
+        return jsonify({"success": False, "error": "No task detail rows to write back"}), 404
+
+    source_file = db.primary_task_detail_source_file(
+        clients=clients, projek_name=projek_name, conn=request_conn()
+    )
+    path = resolve_source_workbook(source_file)
+    if not path:
+        return jsonify({
+            "success": False,
+            "error": f'Cannot find the source workbook "{source_file or "unknown"}" on this server',
+        }), 404
+
+    try:
+        wb = load_workbook(path)
+    except Exception as e:
+        log(f"Task detail workbook open error: {e}", "ERROR")
+        return jsonify({"success": False, "error": f"Cannot open the workbook: {e}"}), 400
+
+    sheet_title = next(
+        (s for s in wb.sheetnames if str(s).strip().upper().endswith(" TASK DETAIL")),
+        None,
+    )
+    if not sheet_title:
+        return jsonify({
+            "success": False,
+            "error": f'No sheet ending in "TASK DETAIL" inside {os.path.basename(path)}',
+        }), 400
+    ws = wb[sheet_title]
+
+    # Rebuild column A's merges: unmerge first (delete_rows does not move
+    # merged ranges), drop the old data region, then re-merge each module's
+    # block once its rows are back on the sheet.
+    for merged in list(ws.merged_cells.ranges):
+        ws.unmerge_cells(str(merged))
+    if ws.max_row > 1:
+        ws.delete_rows(2, ws.max_row - 1)
+
+    # Leave row 1 alone. The source calls this column "% Progress" while the
+    # app calls it "Percentage"; rewriting the header would mutate a file the
+    # user only asked us to put data back into (and the parser accepts both).
+    _fill_task_detail_header(ws, headers)
+
+    groups = []
+    for _, row in df.iterrows():
+        key = (row.get("No"), row.get("Modul"))
+        if not groups or groups[-1]["key"] != key:
+            groups.append({"key": key, "rows": []})
+        groups[-1]["rows"].append(row)
+
+    row_number = 2
+    for position, group in enumerate(groups):
+        start = row_number
+        for row in group["rows"]:
+            for column, value in enumerate(_task_detail_export_values(row, headers), start=1):
+                ws.cell(row=row_number, column=column, value=value)
+            _style_task_detail_row(ws, row_number, headers, date_format="mm-dd-yy")
+            row_number += 1
+        if row_number - 1 > start:
+            ws.merge_cells(start_row=start, start_column=1, end_row=row_number - 1, end_column=1)
+        if position < len(groups) - 1:
+            row_number += 1  # blank line between modules, as the sheet has
+
+    try:
+        wb.save(path)
+    except PermissionError:
+        return jsonify({
+            "success": False,
+            "error": "The workbook is open in Excel -- close it and try again",
+        }), 400
+    except Exception as e:
+        log(f"Task detail workbook save error: {e}", "ERROR")
+        return jsonify({"success": False, "error": f"Cannot write the workbook: {e}"}), 400
+
+    log(f"Task detail written back to {os.path.basename(path)} / {sheet_title} ({len(df)} rows)")
+    return jsonify({
+        "success": True,
+        "rows": len(df),
+        "file": os.path.basename(path),
+        "sheet": sheet_title,
+    })
 
 
 @app.route("/api/add_row", methods=["POST"])

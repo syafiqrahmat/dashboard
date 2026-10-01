@@ -1,0 +1,75 @@
+{# Task Detail tab -- one editable table over the project_task_detail
+   table: the rows of a "<project> TASK DETAIL" sheet, grouped into modules.
+
+   Editing contract (same as tab_11): every editable td carries data-col
+   with the display column name, every tr carries data-row-idx +
+   data-sheet="Task Detail" so /api/save knows which row and which column
+   to update. No/Modul/Proses are the dedup key (idx_ptd_dedup_key) and are
+   therefore rendered read-only -- /api/save updates by id, so changing one
+   could collide with the unique index.
+
+   No and Modul are emitted once per module with a rowspan, the way the
+   source sheet merges them, rather than repeating the module name on all
+   55 rows. The header says "% Progress" while the cell keeps
+   data-col="Percentage", because that is the label /api/save maps to the
+   percentage column and the one buildEditableCellInput() turns into a
+   0-100 number input. #}
+<div class="chart-full">
+  <div class="edit-bar" style="margin-bottom:4px">
+    <button class="btn-pill" type="button" onclick="downloadTaskDetailXlsx(this)">&#11015; Download .xlsx</button>
+    <button class="btn-pill admin-only" type="button" style="display:none" onclick="saveTaskDetailToExcel(this)">&#128190; Save to Excel</button>
+    <span style="flex:1"></span>
+    <button class="btn-save" id="saveBtn12" onclick="saveChanges12()" style="display:none">Save Changes</button>
+    <button class="btn-cancel" id="cancelBtn12" onclick="cancelEdit12()" style="display:none">Cancel</button>
+    <button class="btn-edit admin-only" id="editBtn12" onclick="toggleEdit12()">Enable Editing</button>
+  </div>
+  <p class="disclaimer-note">
+    Per-process progress for this project, one row per line of the source workbook's
+    <strong>TASK DETAIL</strong> sheet. <strong>No</strong>, <strong>Modul</strong> and
+    <strong>Proses</strong> identify the row and are read-only; everything else
+    (including <strong>% Progress</strong> and <strong>Target Date</strong>) is editable.
+    <strong>Save to Excel</strong> writes the rows back into the source workbook.
+  </p>
+
+  {% if task_detail_rows %}
+  <div class="data-table-wrap">
+    <table id="task-detail-table">
+      <thead>
+        <tr>
+          {% for key in task_detail_cols %}
+          <th>{{ '% Progress' if key == 'Percentage' else key }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for module in task_detail_modules %}
+        {% for row in module.rows %}
+        {% set row_is_first = loop.first %}
+        <tr data-row-idx="{{ row.get('_row_idx', '') }}" data-sheet="Task Detail"
+            class="{{ 'module-group-start' if row_is_first else '' }}">
+          {% for key in task_detail_cols %}
+          {% set raw = row.get(key) %}
+          {% set display_val = raw if raw is not none and raw != 'None' and raw != 'nan' else '' %}
+          {% if key in ('No', 'Modul') %}
+            {% if row_is_first %}
+            <td class="readonly-cell group-cell" data-col="{{ key }}" rowspan="{{ module.rows|length }}">{{ display_val }}</td>
+            {% endif %}
+          {% elif key in task_detail_readonly_cols %}
+          <td class="readonly-cell" data-col="{{ key }}">{{ display_val }}</td>
+          {% else %}
+          <td class="editable-cell" data-col="{{ key }}">{{ display_val }}</td>
+          {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="disclaimer-note">
+    No task detail rows yet — upload a workbook containing a
+    <strong>&lt;project&gt; TASK DETAIL</strong> sheet to populate this tab.
+  </p>
+  {% endif %}
+</div>
