@@ -437,6 +437,11 @@ hr{border-color:#d0d5dd;margin:1.2rem 0}
 }
 #project-table tr.title-group-start td{border-top:2px solid var(--accent)}
 #project-table tr.title-group-start td.op-merged-cell{border-top:3px solid var(--accent)}
+/* Task Detail: the module band, and a visual cue that No/Modul/Proses are
+   the row's identity rather than something to type over. */
+#task-detail-table tr.module-group-start td{border-top:2px solid var(--accent)}
+#task-detail-table td.readonly-cell{color:var(--text-dim);background:rgba(0,0,0,0.03)}
+#task-detail-table td.group-cell{font-weight:600;color:var(--text)}
 .save-toast{position:fixed;bottom:24px;right:24px;padding:12px 24px;border-radius:10px;font-weight:600;z-index:9999;display:none;animation:fadeIn 0.3s;max-width:420px}
 .save-toast.success{background:#2ecc71;color:#fff}
 .save-toast.error{background:#e74c3c;color:#fff}
@@ -688,6 +693,9 @@ body.role-admin .viewer-only-note{display:none}
       {% if client_category == 'Development' %}
       <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(3, this)">Project</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(11, this)">Milestones</button>
+      {% if has_task_detail %}
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(12, this)">Task Detail</button>
+      {% endif %}
       {% elif client_category == 'Warranty' %}
       <button type="button" class="tab-btn sidebar-item active" onclick="switchTab(2, this)">Warranty</button>
       {% else %}
@@ -713,6 +721,9 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(8, this)">Ageing List</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(6, this)">SLA Compliance</button>
       <button type="button" class="tab-btn sidebar-item" onclick="switchTab(10, this)">Filters</button>
+      {% if has_task_detail %}
+      <button type="button" class="tab-btn sidebar-item" onclick="switchTab(12, this)">Task Detail</button>
+      {% endif %}
     </nav>
     {% endif %}
   {% endif %}
@@ -863,6 +874,10 @@ body.role-admin .viewer-only-note{display:none}
 
 <div class="tab-pane{{ ' active' if default_tab_idx == 11 else '' }}" id="tab-11" data-loaded="{{ 'true' if default_tab_idx == 11 else 'false' }}">
   {% if default_tab_idx == 11 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
+</div>
+
+<div class="tab-pane{{ ' active' if default_tab_idx == 12 else '' }}" id="tab-12" data-loaded="{{ 'true' if default_tab_idx == 12 else 'false' }}">
+  {% if default_tab_idx == 12 %}{{ default_tab_html|safe }}{% else %}<div class="tab-loading">Loading&hellip;</div>{% endif %}
 </div>
 
 {% endif %}
@@ -1648,6 +1663,7 @@ var DATE_COLUMNS = [
   'Plan Start Date', 'Plan End Date', 'Target Start Date', 'Target End Date',
   'Actual Start Date', 'Actual End Date',
   'Startdate', 'Enddate',
+  'Target Date',
 ];
 function isDateColumn(col) {
   return DATE_COLUMNS.indexOf(col) !== -1;
@@ -2024,7 +2040,11 @@ var editTables = [
     // Order/count must match tab_11.html's <thead> (PROJECT_MILESTONE_DB_COLUMNS
     // in api/db.py) or a new row's cells would land under the wrong headers.
     columns: ['Client', 'Projectname', 'Taskname', 'Duration', 'Startdate', 'Enddate', 'Progress']
-  }]
+  }],
+  // No addRow config on purpose: a task-detail row only makes sense as part
+  // of a module, and a hand-typed one would have to pick a client/project
+  // the tab doesn't display. Edit-only, like client-table above.
+  ['task-detail-table', 'saveBtn12', 'cancelBtn12', 'editBtn12']
 ];
 
 /* Re-run after every lazy tab load, not just once at page-bottom parse
@@ -2072,6 +2092,64 @@ function cancelEdit9() { return false; }
 function toggleEdit11() { return false; }
 function saveChanges11() { return false; }
 function cancelEdit11() { return false; }
+function toggleEdit12() { return false; }
+function saveChanges12() { return false; }
+function cancelEdit12() { return false; }
+
+/* ---------- Task Detail: Excel export / write-back -------------------
+   Both routes are scoped by the same query string the tab is filtered on,
+   so neither can leak another project's rows into a file. */
+function taskDetailDispositionName(header, fallback) {
+  var m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header || '');
+  try { return m ? decodeURIComponent(m[1]) : fallback; } catch (e) { return fallback; }
+}
+
+function downloadTaskDetailXlsx(btn) {
+  fetch('/api/task_detail/export' + window.location.search)
+    .then(function(r) {
+      if (!r.ok) {
+        return r.json().then(function(j) { throw new Error(j.error || ('HTTP ' + r.status)); },
+                              function() { throw new Error('HTTP ' + r.status); });
+      }
+      var name = taskDetailDispositionName(r.headers.get('Content-Disposition'), 'task-detail.xlsx');
+      return r.blob().then(function(blob) { return { blob: blob, name: name }; });
+    })
+    .then(function(file) {
+      var url = URL.createObjectURL(file.blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+      showToast('Downloaded ' + file.name, 'success');
+    })
+    .catch(function(e) { showToast('Export failed: ' + e.message, 'error'); });
+}
+
+function saveTaskDetailToExcel(btn) {
+  var original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = 'Writing&hellip;';
+  fetch('/api/task_detail/save_to_excel' + window.location.search, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}'
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      btn.disabled = false;
+      btn.innerHTML = original;
+      if (result.success) showToast('Wrote ' + result.rows + ' rows to ' + result.file, 'success');
+      else showToast(result.error || 'Save failed', 'error');
+    })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.innerHTML = original;
+      showToast('Save failed: ' + e.message, 'error');
+    });
+}
 
 /* ---------- Project PDF report (client-side, pdfmake) ----------
    Generated entirely in the browser (no server-side PDF dependency, no
@@ -4072,13 +4150,16 @@ function doUpload() {
       if (result.error) {
         html += '<div class="row-err">&#10007; ' + escapeHtml(result.error) + '</div>';
       }
-      if (result.success || result.tickets_inserted || result.tickets_updated || result.projects_inserted || result.projects_updated || result.milestones_inserted || result.milestones_updated) {
+      if (result.success || result.tickets_inserted || result.tickets_updated || result.projects_inserted || result.projects_updated || result.milestones_inserted || result.milestones_updated || result.task_details_inserted || result.task_details_updated) {
         html += '<div class="row-ok">&#10003; ' + result.tickets_inserted + ' new ticket(s), ' + result.tickets_updated + ' updated';
         if (result.projects_inserted || result.projects_updated) {
           html += ' &middot; ' + result.projects_inserted + ' new project row(s), ' + result.projects_updated + ' updated';
         }
         if (result.milestones_inserted || result.milestones_updated) {
           html += ' &middot; ' + result.milestones_inserted + ' new milestone(s), ' + result.milestones_updated + ' updated';
+        }
+        if (result.task_details_inserted || result.task_details_updated) {
+          html += ' &middot; ' + result.task_details_inserted + ' new task detail row(s), ' + result.task_details_updated + ' updated';
         }
         html += '</div>';
       }
@@ -4089,7 +4170,10 @@ function doUpload() {
         html += '<div class="row-warn">&#9888; Column(s) not stored (no matching field): ' + escapeHtml(result.unmapped_columns.join(', ')) + '</div>';
       }
       if (result.notes && result.notes.length) {
-        result.notes.forEach(function(note) { html += '<div class="row-ok">&#10003; ' + escapeHtml(note) + '</div>'; });
+        // A note here means something was deliberately skipped (e.g. a TASK
+        // DETAIL sheet whose project isn't in the Client sheet), so it reads
+        // as a warning rather than a green tick.
+        result.notes.forEach(function(note) { html += '<div class="row-warn">&#9888; ' + escapeHtml(note) + '</div>'; });
       }
       if (result.errors && result.errors.length) {
         result.errors.forEach(function(err) { html += '<div class="row-err">&#10007; ' + escapeHtml(err) + '</div>'; });

@@ -117,6 +117,18 @@ MILESTONE_COLUMNS = [
     "Client", "Projectname", "Taskname", "Duration", "Startdate", "Enddate", "Progress",
 ]
 
+# The nine columns a "<project> TASK DETAIL" sheet carries, under the display
+# labels db.TASK_DETAIL_DB_COLUMNS uses -- note "% Progress" is renamed to
+# "Percentage" by the parser so the tab can drive the same 0-100 number input
+# the Project tab's Percentage column uses. Client and Projek Name are derived
+# from the sheet name at parse time and Dedup Seq is plumbing, so all three
+# live in db.TASK_DETAIL_DB_COLUMNS but not here -- same split as
+# MILESTONE_COLUMNS vs PROJECT_MILESTONE_DB_COLUMNS.
+TASK_DETAIL_INPUT_COLUMNS = [
+    "No", "Modul", "Proses", "Definisi", "Task",
+    "Percentage", "PIC", "Target Date", "Plan",
+]
+
 
 def standardize_columns(df):
     col_map = {}
@@ -615,6 +627,121 @@ def parse_milestone_sheet(df, source_file):
             df[col] = None
 
     return df[MILESTONE_COLUMNS], {"rows_dropped": rows_dropped, "unmapped_columns": unmapped_columns}
+
+
+def parse_task_detail_sheet(df, source_file, client, projek_name):
+    """Standardize a "<project> TASK DETAIL" sheet into project_task_detail
+    rows: one row per process line, tagged with the client and project the
+    sheet name implies (the sheet itself has no Client/Projek Name column).
+
+    The sheet groups rows visually: No and Modul are only filled in on the
+    first line of each module (merged cells / blanks below), and blank
+    spacer rows separate the modules. Both are storage details rather than
+    data, so ffill the group labels and drop the spacers -- the same
+    merged-cell emulation parse_project_sheet does for Title.
+
+    Returns (parsed_df, info) with the diagnostics shape the other four
+    parsers use, so the upload UI reports what got left behind.
+    """
+    df = df.dropna(how="all").copy()
+
+    rename_map = {}
+    for c in df.columns:
+        cl = str(c).strip().lower()
+        if cl in ("% progress", "progress", "%progress", "progress (%)"):
+            rename_map[c] = "Percentage"
+        elif cl == "target date":
+            rename_map[c] = "Target Date"
+        elif cl == "no":
+            rename_map[c] = "No"
+        elif cl == "modul" or cl == "module":
+            rename_map[c] = "Modul"
+        elif cl == "proses":
+            rename_map[c] = "Proses"
+        elif cl == "definisi":
+            rename_map[c] = "Definisi"
+        elif cl == "task":
+            rename_map[c] = "Task"
+        elif cl == "pic":
+            rename_map[c] = "PIC"
+        elif cl == "plan":
+            rename_map[c] = "Plan"
+    df = df.rename(columns=rename_map)
+
+    for c in ("Modul", "Proses", "Task", "PIC", "Plan", "Definisi"):
+        if c in df.columns:
+            df[c] = (
+                df[c].astype(str)
+                # Collapse runs of spaces/tabs but keep line breaks: Definisi
+                # and Task are wrapped cells with real blank lines in them,
+                # and dropping those would make a write-back silently differ
+                # from the sheet it came from.
+                .str.replace(r"[^\S\n]+", " ", regex=True)
+                .str.strip()
+            )
+            df.loc[df[c].isin(["", "nan", "None", "NaT"]), c] = None
+
+    # No/Modul are merged-or-blank on continuation rows: the module label
+    # has to reach every row of its group or the rows can't be keyed on it.
+    for c in ("No", "Modul"):
+        if c in df.columns:
+            df[c] = df[c].ffill()
+    if "No" in df.columns:
+        # Float until this point (the blanks force a float column in pandas);
+        # nullable Int64 keeps whole numbers as integers for the INTEGER column.
+        df["No"] = pd.to_numeric(df["No"], errors="coerce").astype("Int64")
+
+    if "Target Date" in df.columns:
+        df["Target Date"] = pd.to_datetime(df["Target Date"], errors="coerce", dayfirst=True)
+
+    # Excel's percentage format stores 50% as 0.5 with no "%" character to
+    # strip -- scale fractional values into the 0-100 range the UI expects.
+    if "Percentage" in df.columns:
+        df["Percentage"] = _scale_percentage(df["Percentage"])
+
+    # A row with no Proses is one of the blank spacer rows between module
+    # groups -- nothing to key an upsert on, so count it as dropped.
+    rows_dropped = 0
+    if "Proses" in df.columns:
+        valid = df["Proses"].notna()
+        rows_dropped = int((~valid).sum())
+        df = df[valid]
+    else:
+        rows_dropped = len(df)
+        df = df.iloc[0:0]
+
+    if client:
+        df["Client"] = client
+    if projek_name:
+        df["Projek Name"] = projek_name
+    # What the Save to Excel button writes back into: recorded here rather
+    # than inferred later, since the upload may have been renamed since.
+    df["Source File"] = source_file
+
+    # Same occurrence-counter trick as parse_milestone_sheet: the dedup key
+    # (client, project, modul, proses) can't distinguish the same process
+    # line listed twice in one module, and SQL NULL keys would never match.
+    if not df.empty:
+        key_basis = df[["Client", "Projek Name", "Modul", "Proses"]].astype(str)
+        df["Dedup Seq"] = key_basis.groupby(list(key_basis.columns)).cumcount()
+    else:
+        df["Dedup Seq"] = pd.Series(dtype=int)
+
+    # The source has a "Plan" column that is empty in this workbook, and may
+    # pick up stray columns from a future edit -- report rather than drop.
+    unmapped_columns = [
+        c for c in df.columns
+        if c not in TASK_DETAIL_INPUT_COLUMNS
+        and c not in ("Client", "Projek Name", "Source File", "Dedup Seq")
+        and not str(c).startswith("Unnamed")
+    ]
+
+    return_cols = ["Client", "Projek Name"] + TASK_DETAIL_INPUT_COLUMNS + ["Source File", "Dedup Seq"]
+    for col in return_cols:
+        if col not in df.columns:
+            df[col] = None
+
+    return df[return_cols], {"rows_dropped": rows_dropped, "unmapped_columns": unmapped_columns}
 
 
 def detect_ticket_sheets(filepath_or_buffer):

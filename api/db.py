@@ -100,6 +100,47 @@ PROJECT_MILESTONE_DB_COLUMNS = [
     ("Dedup Seq", "dedup_seq"),
 ]
 
+# Display label -> column for the project_task_detail table: one row per
+# process line of a "<project> TASK DETAIL" sheet (No/Modul group the rows
+# into modules, Proses is the line, Definisi/Task describe it, Percentage is
+# the progress). "Client" and "Projek Name" are not on the sheet -- they are
+# derived from the sheet name at parse time -- and "Dedup Seq" is plumbing
+# for the re-upload key, so all three are filtered out of the tab's visible
+# column list the same way the Milestones tab drops "Dedup Seq".
+TASK_DETAIL_DB_COLUMNS = [
+    ("Client", "client"),
+    ("Projek Name", "projek_name"),
+    ("No", "no"),
+    ("Modul", "modul"),
+    ("Proses", "proses"),
+    ("Definisi", "definisi"),
+    ("Task", "task"),
+    ("Percentage", "percentage"),
+    ("PIC", "pic"),
+    ("Target Date", "target_date"),
+    ("Plan", "plan"),
+    ("Source File", "source_file"),
+    ("Dedup Seq", "dedup_seq"),
+]
+
+# Columns the Task Detail tab renders. Client/Projek Name scope the rows and
+# Dedup Seq is plumbing, so none of the three is shown.
+TASK_DETAIL_COLUMNS = [
+    "No", "Modul", "Proses", "Definisi", "Task",
+    "Percentage", "PIC", "Target Date", "Plan",
+]
+
+# The dedup key columns, also the ones the Task Detail tab keeps read-only:
+# /api/save updates by id, so editing a key column could collide with
+# idx_ptd_dedup_key and surface as an opaque database error.
+TASK_DETAIL_KEY_COLUMNS = ("client", "projek_name", "modul", "proses", "dedup_seq")
+
+# What /api/save refuses to touch. `no` is not part of the dedup key (the
+# upsert above matches without it), but it is the module number the tab
+# shows read-only, and letting a request rewrite it would silently reorder
+# the sheet on the next write-back.
+TASK_DETAIL_READONLY_COLUMNS = TASK_DETAIL_KEY_COLUMNS + ("no",)
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tickets (
     id SERIAL PRIMARY KEY,
@@ -332,6 +373,53 @@ CREATE UNIQUE INDEX idx_projectmilestone_dedup_key ON projectmilestone (
     COALESCE(client, ''),
     COALESCE(project_name, ''),
     COALESCE(task_name, ''),
+    dedup_seq
+);
+
+-- One row per process line of a "<project> TASK DETAIL" sheet. client and
+-- projek_name are derived from the sheet name rather than read off the
+-- sheet, so every row knows which project it belongs to and the tab can be
+-- filtered per project. percentage is NUMERIC 0-100 (the sheet stores Excel
+-- fractions like 0.5, scaled up by data_utils._scale_percentage on parse) --
+-- deliberately numeric rather than the TEXT projectmilestone.progress uses,
+-- because the Task Detail tab edits it through the same 0-100 number input
+-- the Project tab's Percentage column uses. No FK to clients: the other
+-- tables don't reference each other either.
+CREATE TABLE IF NOT EXISTS project_task_detail (
+    id SERIAL PRIMARY KEY,
+    client TEXT,
+    projek_name TEXT,
+    no INTEGER,
+    modul TEXT,
+    proses TEXT,
+    definisi TEXT,
+    task TEXT,
+    percentage NUMERIC,
+    pic TEXT,
+    target_date DATE,
+    plan TEXT,
+    source_file TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_task_detail_scope
+    ON project_task_detail(client, projek_name);
+
+-- Same NULL-safe dedup pattern as idx_projectmilestone_dedup_key above.
+-- Keyed on (client, projek_name, modul, proses) and NOT on the dates or the
+-- percentage: those change on every plan revision, and a value in the key
+-- would turn each revision into a second copy of the row instead of an
+-- update. "No" is excluded for the same reason -- it is the module number
+-- the UI displays, not an identity. dedup_seq disambiguates two otherwise
+-- identical process lines, counting occurrences the way the other tables do.
+ALTER TABLE project_task_detail ADD COLUMN IF NOT EXISTS dedup_seq INTEGER NOT NULL DEFAULT 0;
+DROP INDEX IF EXISTS idx_ptd_dedup_key;
+CREATE UNIQUE INDEX idx_ptd_dedup_key ON project_task_detail (
+    COALESCE(client, ''),
+    COALESCE(projek_name, ''),
+    COALESCE(modul, ''),
+    COALESCE(proses, ''),
     dedup_seq
 );
 """
@@ -1312,3 +1400,195 @@ def delete_project_milestone_row(row_id, conn=None):
         with c.cursor() as cur:
             cur.execute("DELETE FROM projectmilestone WHERE id = %s", (row_id,))
             return cur.rowcount > 0
+
+
+def _task_detail_where(clients=None, projek_name=None):
+    """Shared (clause, params) for the two project_task_detail readers below.
+    clients is a list of display client names (the same shape parse_filters
+    produces) and may be None/empty to mean "every client"."""
+    clause, params = [], []
+    if clients:
+        clause.append("client = ANY(%s)")
+        params.append(list(clients))
+    if projek_name:
+        clause.append("projek_name = %s")
+        params.append(projek_name)
+    return (" WHERE " + " AND ".join(clause) if clause else ""), params
+
+
+def fetch_project_task_detail_df(clients=None, projek_name=None, conn=None):
+    """The Task Detail tab's rows: _row_idx (the table's id) plus every
+    display column, in TASK_DETAIL_COLUMNS order, filtered down to the
+    project(s) the current request is scoped to. Target Date comes back as
+    datetime so the tab can strftime it, Percentage as a float because
+    read_sql_query hands back psycopg2 Decimals otherwise."""
+    db_cols = [c for _, c in TASK_DETAIL_DB_COLUMNS]
+    display_cols = [c for c, _ in TASK_DETAIL_DB_COLUMNS]
+    where, params = _task_detail_where(clients, projek_name)
+    # no (the module number) then id: modules must stay in sheet order, and
+    # alphabetical-by-modul would sort "Modul EFT" before "Modul Lejar Am".
+    sql = (
+        f"SELECT id, {', '.join(db_cols)} FROM project_task_detail{where} "
+        "ORDER BY no NULLS LAST, id"
+    )
+
+    with db_connection(conn) as c:
+        df = pd.read_sql_query(sql, c, params=params or None)
+
+    if df.empty:
+        return pd.DataFrame(columns=["_row_idx"] + TASK_DETAIL_COLUMNS)
+
+    df = df.rename(columns=dict(zip(db_cols, display_cols)))
+    df = df.rename(columns={"id": "_row_idx"})
+
+    if "Target Date" in df.columns:
+        df["Target Date"] = pd.to_datetime(df["Target Date"])
+    if "Percentage" in df.columns:
+        df["Percentage"] = pd.to_numeric(df["Percentage"], errors="coerce")
+    if "No" in df.columns:
+        df["No"] = pd.to_numeric(df["No"], errors="coerce").astype("Int64")
+
+    return df[["_row_idx"] + TASK_DETAIL_COLUMNS]
+
+
+def has_task_detail(clients=None, projek_name=None, conn=None):
+    """True when the current filter scope has at least one task-detail row.
+    The dashboard shell calls this once per page load to decide whether to
+    show the Task Detail sidebar button, so it stays an EXISTS rather than
+    pulling the 55 rows up just to throw them away."""
+    where, params = _task_detail_where(clients, projek_name)
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(f"SELECT EXISTS(SELECT 1 FROM project_task_detail{where})", params)
+            return bool(cur.fetchone()[0])
+
+
+def upsert_project_task_details(df, conn=None):
+    """Insert new task-detail rows / update existing ones (matched by client
+    + projek_name + modul + proses, with dedup_seq counting same-key repeats)
+    so re-uploading the sheet refreshes progress/PIC/dates in place instead
+    of appending a second copy of every process line.
+
+    Returns (inserted_count, updated_count).
+    """
+    if df.empty:
+        return 0, 0
+
+    if "Dedup Seq" not in df.columns:
+        df = df.copy()
+        df["Dedup Seq"] = 0
+
+    records = _records_for_insert(df, TASK_DETAIL_DB_COLUMNS)
+    db_cols = [c for _, c in TASK_DETAIL_DB_COLUMNS]
+    key_cols = TASK_DETAIL_KEY_COLUMNS
+    update_cols = [c for c in db_cols if c not in key_cols]
+    set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
+
+    # Must match idx_ptd_dedup_key's expressions exactly for Postgres to
+    # recognize it as the ON CONFLICT target.
+    sql = f"""
+        INSERT INTO project_task_detail ({', '.join(db_cols)})
+        VALUES %s
+        ON CONFLICT (
+            COALESCE(client, ''),
+            COALESCE(projek_name, ''),
+            COALESCE(modul, ''),
+            COALESCE(proses, ''),
+            dedup_seq
+        ) DO UPDATE SET
+            {set_clause},
+            updated_at = now()
+        RETURNING (xmax = 0) AS inserted
+    """
+
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            results = psycopg2.extras.execute_values(cur, sql, records, page_size=500, fetch=True)
+
+    inserted = sum(1 for r in results if r[0])
+    updated = len(results) - inserted
+    return inserted, updated
+
+
+def update_project_task_detail_field(row_id, db_column, value, conn=None):
+    valid_cols = {c for _, c in TASK_DETAIL_DB_COLUMNS}
+    if db_column not in valid_cols:
+        raise ValueError(f"Unknown column: {db_column}")
+    if db_column in TASK_DETAIL_READONLY_COLUMNS:
+        raise ValueError(f"Column is part of the task-detail key and is read-only: {db_column}")
+    if db_column == "percentage":
+        # The tab sends the cell's text, so a typo would otherwise reach the
+        # DB and only fail later when the Excel writer does float(v)/100.
+        try:
+            pct = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("Percentage must be a number between 0 and 100")
+        if not 0 <= pct <= 100:
+            raise ValueError("Percentage must be between 0 and 100")
+        value = pct
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                f"UPDATE project_task_detail SET {db_column} = %s, updated_at = now() WHERE id = %s",
+                (value, row_id),
+            )
+
+
+def fetch_task_detail_for_export(clients=None, projek_name=None, conn=None):
+    """Ordered rows for the Excel export/download buttons: grouped by module
+    number exactly as the sheet lays them out, with the date already turned
+    into a date so openpyxl writes a real date cell rather than a string."""
+    where, params = _task_detail_where(clients, projek_name)
+    sql = (
+        f"SELECT id, {', '.join(c for _, c in TASK_DETAIL_DB_COLUMNS)} "
+        f"FROM project_task_detail{where} ORDER BY no NULLS LAST, id"
+    )
+    with db_connection(conn) as c:
+        df = pd.read_sql_query(sql, c, params=params or None)
+    if df.empty:
+        return df
+    # DB column -> display label (TASK_DETAIL_DB_COLUMNS is stored as pairs
+    # in display order, so the mapping has to be inverted).
+    df = df.rename(columns={dbcol: display for display, dbcol in TASK_DETAIL_DB_COLUMNS})
+    if "Target Date" in df.columns:
+        df["Target Date"] = pd.to_datetime(df["Target Date"]).dt.date
+    return df
+
+
+def primary_task_detail_source_file(clients=None, projek_name=None, conn=None):
+    """The workbook the task-detail rows were uploaded from, so the Save to
+    Excel button knows which file to write back into. Most common value wins:
+    a re-upload from a renamed copy then keeps writing where most of the data
+    actually came from instead of flipping a coin."""
+    clause, params = _task_detail_where(clients, projek_name)
+    not_empty = "source_file IS NOT NULL AND source_file <> %s"
+    where = (f"{clause} AND {not_empty}") if clause else f" WHERE {not_empty}"
+    sql = (
+        f"SELECT source_file FROM project_task_detail{where} "
+        "GROUP BY source_file ORDER BY COUNT(*) DESC LIMIT 1"
+    )
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(sql, params + [""])
+            row = cur.fetchone()
+    return row[0] if row else None
+
+
+def find_client_for_project(projek_name, conn=None):
+    """Which client owns this project, or None.
+
+    Used to tag a '<project> TASK DETAIL' sheet, which carries no Client
+    column of its own. Searches the clients table only -- callers that have
+    the workbook's own Client sheet in hand try that first, since it is the
+    newer statement of the same mapping.
+    """
+    if not projek_name:
+        return None
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute(
+                "SELECT client FROM clients WHERE TRIM(projek_name) = %s ORDER BY id LIMIT 1",
+                (projek_name,),
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
