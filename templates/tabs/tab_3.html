@@ -10,6 +10,9 @@
   <span style="flex:1"></span>
   <button class="btn-pill" type="button" onclick="downloadProjectReport(this)">&#128196; Download Report (PDF)</button>
   <button class="btn-pill" type="button" onclick="downloadProjectReportPptx(this)">&#128202; Download Report (PPTX)</button>
+  {% if is_development_client %}
+  <button class="btn-pill" type="button" onclick="downloadDevelopmentReport(this)">&#128202; Generate Report (PPTX)</button>
+  {% endif %}
 </div>
 {% endif %}
 <div class="chart-row">

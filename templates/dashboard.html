@@ -1615,7 +1615,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
           value: item.value
         })
       })
-      .then(function(r) { return r.json(); })
+      .then(parseJsonResponse)
       .then(function(result) {
         if (result.success) {
           saved++;
@@ -1624,7 +1624,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
         }
       })
       .catch(function(e) {
-        errors.push(item.column + ': ' + e.message);
+        errors.push(item.column + ': ' + fetchErrorMessage(e));
       })
       .finally(checkDone);
     });
@@ -1635,7 +1635,7 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
           if (result.success) saved++;
           else errors.push('New row: ' + (result.error || 'unknown'));
         })
-        .catch(function(e) { errors.push('New row: ' + e.message); })
+        .catch(function(e) { errors.push('New row: ' + fetchErrorMessage(e)); })
         .finally(checkDone);
     });
   }
@@ -1651,6 +1651,26 @@ function makeEditable(tableId, saveBtnId, cancelBtnId, editBtnId, addRowConfig) 
 function escapeHtml(text) {
   if (!text) return '';
   return String(text).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* ---------- Save/fetch error handling ----------
+   The browser's bare TypeError "Failed to fetch" is what every save/upload
+   surfaces when the request never reached the server at all (backend not
+   running, restarted mid-save) -- it reads like an unexplained failure, so
+   map it to the actionable wording the upload path always used: name the
+   host and what to check. parseJsonResponse() covers the other half: a
+   non-JSON reply (e.g. a Werkzeug 500 HTML page) used to surface as
+   "Unexpected token '<'" from r.json(), which is equally unhelpful. */
+function fetchErrorMessage(e) {
+  if (e && e.message === 'Failed to fetch') {
+    return 'Cannot reach the server at ' + window.location.host + ' — is python api/index.py running?';
+  }
+  return (e && e.message) || 'unknown';
+}
+function parseJsonResponse(r) {
+  return r.json().catch(function() {
+    throw new Error('server returned HTTP ' + r.status);
+  });
 }
 
 /* ---------- Date-column editing (native calendar picker, saved in the
@@ -1786,7 +1806,7 @@ function postNewRow(dbTable, values) {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({table: dbTable, values: values})
-  }).then(function(r) { return r.json(); });
+  }).then(parseJsonResponse);
 }
 
 /* ---------- Percentage -> Status Progress / Overall Progress live sync
@@ -1972,12 +1992,12 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(item)
       })
-      .then(function(r) { return r.json(); })
+      .then(parseJsonResponse)
       .then(function(result) {
         if (result.success) saved++;
         else errors.push(item.column + ': ' + (result.error || 'unknown'));
       })
-      .catch(function(e) { errors.push(item.column + ': ' + e.message); })
+      .catch(function(e) { errors.push(item.column + ': ' + fetchErrorMessage(e)); })
       .finally(checkDone);
     });
 
@@ -1987,7 +2007,7 @@ function makeEditableMulti(tableClass, saveBtnId, cancelBtnId, editBtnId, tabId,
           if (result.success) saved++;
           else errors.push('New row: ' + (result.error || 'unknown'));
         })
-        .catch(function(e) { errors.push('New row: ' + e.message); })
+        .catch(function(e) { errors.push('New row: ' + fetchErrorMessage(e)); })
         .finally(checkDone);
     });
   }
@@ -2149,6 +2169,41 @@ function saveTaskDetailToExcel(btn) {
       btn.innerHTML = original;
       showToast('Save failed: ' + e.message, 'error');
     });
+}
+
+/* Development progress deck (.pptx), scoped to the client the Project tab
+   is filtered on. Rendered server-side (PIL -> python-pptx, see
+   api/report_pptx.py) so the slides match the approved template exactly;
+   this just saves the bytes. */
+function downloadDevelopmentReport(btn) {
+  var client = new URLSearchParams(window.location.search).get('client');
+  if (!client) {
+    alert('Select a single client first to generate a development report.');
+    return;
+  }
+  var original = setButtonLoading(btn, 'Generating Report...');
+  fetch('/api/report/development?client=' + encodeURIComponent(client))
+    .then(function(r) {
+      if (!r.ok) {
+        return r.json().then(function(j) { throw new Error(j.error || ('HTTP ' + r.status)); },
+                              function() { throw new Error('HTTP ' + r.status); });
+      }
+      var name = taskDetailDispositionName(r.headers.get('Content-Disposition'), 'LKTN_Enhancement_Progress.pptx');
+      return r.blob().then(function(blob) { return { blob: blob, name: name }; });
+    })
+    .then(function(file) {
+      var url = URL.createObjectURL(file.blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+      showToast('Downloaded ' + file.name, 'success');
+    })
+    .catch(function(e) { showToast('Report failed: ' + fetchErrorMessage(e), 'error'); })
+    .finally(function() { restoreButton(btn, original); });
 }
 
 /* ---------- Project PDF report (client-side, pdfmake) ----------
@@ -4029,12 +4084,12 @@ function saveChanges8() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(item)
     })
-    .then(function(r) { return r.json(); })
+    .then(parseJsonResponse)
     .then(function(result) {
       if (result.success) saved++;
       else errors.push(item.column + ': ' + (result.error || 'unknown'));
     })
-    .catch(function(e) { errors.push(item.column + ': ' + e.message); })
+    .catch(function(e) { errors.push(item.column + ': ' + fetchErrorMessage(e)); })
     .finally(function() {
       if (idx === pending.length - 1) {
         setTimeout(function() {
@@ -4189,9 +4244,7 @@ function doUpload() {
     })
     .catch(function(e) {
       document.getElementById('uploadProgress').style.display = 'none';
-      var msg = (e.message === 'Failed to fetch')
-        ? 'Cannot reach the server at ' + window.location.host + ' — is python api/index.py running?'
-        : e.message;
+      var msg = fetchErrorMessage(e);
       document.getElementById('uploadResult').innerHTML = '<div class="row-err">Upload failed: ' + escapeHtml(msg) + '</div>';
       document.getElementById('uploadSubmitBtn').disabled = false;
     });

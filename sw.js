@@ -39,15 +39,11 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Everything else (the dashboard itself, filtered/uploaded data) is
-  // dynamic, so always prefer a fresh network response; only fall back
-  // to whatever was last cached if the network is unavailable.
-  event.respondWith(
-    fetch(req)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
-        return res;
-      })
-      .catch(() => caches.match(req))
-  );
+  // dynamic and deliberately NOT intercepted: the old cache-on-success /
+  // serve-stale-on-failure pair here masked a dead backend completely --
+  // the page and its lazy-loaded tabs still rendered from cache while
+  // every save/upload failed with a bare "Failed to fetch", which is
+  // near-impossible to diagnose from the UI. Letting the browser handle
+  // these requests means a down server fails loudly (browser error page)
+  // instead of pretending to work.
 });

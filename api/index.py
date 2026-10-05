@@ -1,3 +1,4 @@
+import colorsys
 import io
 import os
 import re
@@ -25,6 +26,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env
 
 import db
 import mysupport_sync
+import report_pptx
 from data_utils import (
     COLORS, PRIORITY_COLORS, AGEING_COLORS,
     parse_ticket_sheet, parse_project_sheet, parse_client_sheet, parse_milestone_sheet,
@@ -468,6 +470,172 @@ def resolve_project_scope(project_df, filters):
             project_df = project_df.copy()
             project_df["Projek Name"] = projek_name
     return project_df
+
+
+# Fixed order for the Milestones tab's Status Progress donut so the segments
+# read best -> worst regardless of how the row counts happen to come out, and
+# a stable green/amber/gray palette so the three statuses never swap colors
+# between renders (px.pie's default palette would assign them by first
+# appearance).
+MILESTONE_STATUS_ORDER = ["Completed", "In Progress", "Not Started"]
+MILESTONE_STATUS_COLORS = {
+    "Completed": "#34d399",
+    "In Progress": "#60a5fa",
+    "Not Started": "#94a3b8",
+}
+
+
+def parse_progress_pct(value):
+    """Milestone Progress is free text -- the sheet parser turns Excel's
+    0-1 fraction into a "90%" label (data_utils.parse_milestone_sheet), but
+    inline edits and + Add Row store whatever was typed. Strip a trailing %,
+    read the number, and scale anything <= 1 the way the ingest path does
+    (a bare "0.9" means 90%, not 0.9%). Returns None when there's nothing
+    numeric to plot, so the caller can drop the row rather than fake a 0%."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip().replace("%", "")
+        if value in ("", "nan", "None", "none"):
+            return None
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return None
+    if n != n:  # NaN
+        return None
+    if abs(n) <= 1:
+        n *= 100
+    return round(n)
+
+
+def milestone_status_label(pct):
+    """Same rule recompute_status_from_percentage() / statusForPercentage()
+    / applyEndDateBadges() all use, so the donut agrees with the badge the
+    Milestones table already draws next to each row."""
+    if pct <= 0:
+        return "Not Started"
+    if pct >= 100:
+        return "Completed"
+    return "In Progress"
+
+
+def milestone_task_colors(n):
+    """n distinct colors for the Milestone Progress bars, one per Taskname.
+
+    plotly's default discrete palette only has 10 entries and silently wraps
+    around, so a rollout plan with 11+ tasks (Kick-off, GAP Analysis, UAT,
+    ...) would draw two tasks in the same color and read as one. Evenly
+    spaced hues at a fixed saturation/brightness give a distinguishable
+    shade for however many tasks the data happens to carry."""
+    n = max(int(n), 1)
+    colors = []
+    for i in range(n):
+        r, g, b = colorsys.hsv_to_rgb(i / n, 0.68, 0.92)
+        colors.append("#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255)))
+    return colors
+
+
+def build_milestone_charts(milestone_df):
+    """The Milestones tab's two charts: Milestone Progress (one bar per
+    project-task, colored per Taskname, so the bars line up with the table
+    rows below it) and Status Progress (donut of task counts by the status
+    derived from Progress). Rows whose Progress isn't numeric are left out
+    of both -- there's no percentage to chart and no status to derive."""
+    charts = {}
+    if milestone_df.empty or "Taskname" not in milestone_df.columns:
+        return charts
+
+    work = milestone_df.copy()
+    work = work[work["Taskname"].fillna("").astype(str).str.strip() != ""]
+    if work.empty:
+        return charts
+
+    if "Progress" in work.columns:
+        work["Progress Pct"] = work["Progress"].map(parse_progress_pct)
+    else:
+        work["Progress Pct"] = None
+
+    has_project = "Projectname" in work.columns
+
+    chartable = work[work["Progress Pct"].notna()]
+    if not chartable.empty:
+        # Table row order, not alphabetical: drop_duplicates(keep="first")
+        # preserves the sheet order the tab renders (same trick as
+        # build_project_charts' module bar).
+        group_cols = ["Client", "Projectname", "Taskname"] if has_project else ["Taskname"]
+        group_cols = [c for c in group_cols if c in chartable.columns]
+        bars = chartable.drop_duplicates(subset=group_cols, keep="first").copy()
+        bars["Task Label"] = bars["Taskname"].astype(str)
+        bars["Progress Pct"] = bars["Progress Pct"].astype(float)
+
+        # A Taskname that appears once (the single-project case) labels its
+        # own bar; one repeated across projects gets the project appended so
+        # the two don't land on the same x. plotly's default barmode
+        # ("relative" -- what the Project tab's Module Progress chart uses)
+        # spans each bar across its whole category slot, which is what keeps
+        # the bars wide instead of one thin strip per trace; the flip side is
+        # that two values sharing an x would stack past the 0-100 axis.
+        dupes = bars["Task Label"].duplicated(keep=False)
+        bars["Axis Label"] = bars["Task Label"]
+        if dupes.any() and "Projectname" in bars.columns:
+            proj = bars["Projectname"].fillna("").astype(str).str.strip()
+            proj = proj.where(proj != "", "Project")
+            bars.loc[dupes, "Axis Label"] = (
+                bars.loc[dupes, "Task Label"] + " (" + proj[dupes] + ")"
+            )
+
+        fig = px.bar(
+            bars, x="Axis Label", y="Progress Pct",
+            color="Task Label",
+            color_discrete_sequence=milestone_task_colors(bars["Task Label"].nunique()),
+            title="Milestone Progress", text="Progress Pct",
+            category_orders={"Axis Label": bars["Axis Label"].tolist()},
+        )
+        fig.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+        fig.update_layout(
+            template="plotly_white",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#374151"),
+            xaxis_tickangle=-45, xaxis_title="Task",
+            yaxis_title="Progress (%)", yaxis_range=[0, 110],
+            showlegend=False,
+            margin=dict(t=50, b=80),
+        )
+        charts["progress_chart"] = fig.to_html(
+            full_html=False, include_plotlyjs=False, config={"displayModeBar": False}
+        )
+
+    # The donut counts the same rows the bar chart plots -- a row with no
+    # numeric Progress has no derivable status either.
+    if not chartable.empty:
+        statuses = chartable["Progress Pct"].map(milestone_status_label)
+        counts = (
+            statuses.value_counts()
+            .reindex(MILESTONE_STATUS_ORDER)
+            .dropna()
+            .reset_index()
+        )
+        if not counts.empty:
+            counts.columns = ["Status", "Count"]
+            fig = px.pie(
+                counts, names="Status", values="Count",
+                title="Status Progress", hole=0.3,
+                category_orders={"Status": MILESTONE_STATUS_ORDER},
+                color="Status", color_discrete_map=MILESTONE_STATUS_COLORS,
+            )
+            fig.update_traces(textposition="inside", textinfo="percent+value")
+            fig.update_layout(
+                template="plotly_white",
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#374151"),
+                legend_title_text="Status",
+            )
+            charts["status_chart"] = fig.to_html(
+                full_html=False, include_plotlyjs=False, config={"displayModeBar": False}
+            )
+
+    return charts
 
 
 def build_project_charts(df):
@@ -1800,7 +1968,23 @@ def build_tab_context(idx, filters, filter_options, df=None):
         project_df = recompute_duration(project_df)
         has_project = not project_df.empty
         project_charts = build_project_charts(project_df) if has_project else {}
-        return "tabs/tab_3.html", {**common, "has_project": has_project, "project_charts": project_charts}
+        # The per-client "Generate Report (PPTX)" button builds the
+        # Development progress deck, so only offer it for a Development
+        # client (clients table is what says which section a client is in).
+        is_development_client = False
+        if single_client_mode:
+            try:
+                clients_df = load_client_data()
+                sel = str(filters["clients"][0]).strip().lower()
+                if not clients_df.empty and {"Client", "Projek Status"} <= set(clients_df.columns):
+                    hit = clients_df[clients_df["Client"].astype(str).str.strip().str.lower() == sel]
+                    is_development_client = bool(
+                        hit["Projek Status"].astype(str).str.strip().str.lower().eq("development").any())
+            except Exception as e:
+                log(f"DB error checking development client: {e}", "ERROR")
+        return "tabs/tab_3.html", {**common, "has_project": has_project,
+                                   "project_charts": project_charts,
+                                   "is_development_client": is_development_client}
 
     if idx == 4:
         if df is None:
@@ -2051,6 +2235,15 @@ def build_tab_context(idx, filters, filter_options, df=None):
                 )
             ]
 
+        # Charts are built from the raw labels, before `detail` below turns
+        # NaNs into "" and the dates into dd/mm/yyyy strings -- same
+        # client/project scope the table gets, so both views agree.
+        try:
+            milestone_charts = build_milestone_charts(milestone_df)
+        except Exception as e:
+            log(f"Error building milestone charts: {e}", "ERROR")
+            milestone_charts = {}
+
         detail = milestone_df[["_row_idx"] + [c for c in cols if c in milestone_df.columns]].copy()
         for c in ("Startdate", "Enddate"):
             if c in detail.columns and not detail[c].isna().all():
@@ -2062,6 +2255,7 @@ def build_tab_context(idx, filters, filter_options, df=None):
                 **common,
                 "milestone_cols": [c for c in cols if c in detail.columns],
                 "milestone_rows": detail.to_dict("records"),
+                "milestone_charts": milestone_charts,
             },
         )
 
@@ -2637,6 +2831,11 @@ def api_save():
     column = data.get("column")
     value = data.get("value")
     sheet = data.get("sheet")
+    # Logged up front so the terminal always shows whether a save reached the
+    # process at all -- when the browser reports "Failed to fetch" the request
+    # never arrived, and without this line there was nothing on the server
+    # side to correlate against the client's error toast.
+    log(f"save: sheet={sheet} column={column} row={row_idx}")
 
     if sheet == "Client":
         db_column = CLIENT_DB_COL_BY_DISPLAY.get(column)
@@ -2646,6 +2845,7 @@ def api_save():
             db.update_client_field(int(row_idx), db_column, value, conn=request_conn())
             return {"success": True}
         except Exception as e:
+            log(f"save error: sheet={sheet} column={column} row={row_idx}: {e}", "ERROR")
             return {"success": False, "error": str(e)}
 
     if sheet == "Milestone":
@@ -2656,6 +2856,7 @@ def api_save():
             db.update_project_milestone_field(int(row_idx), db_column, value, conn=request_conn())
             return {"success": True}
         except Exception as e:
+            log(f"save error: sheet={sheet} column={column} row={row_idx}: {e}", "ERROR")
             return {"success": False, "error": str(e)}
 
     if sheet == "Client Project":
@@ -2666,6 +2867,7 @@ def api_save():
             db.update_project_field(int(row_idx), db_column, value, conn=request_conn())
             return {"success": True}
         except Exception as e:
+            log(f"save error: sheet={sheet} column={column} row={row_idx}: {e}", "ERROR")
             return {"success": False, "error": str(e)}
 
     if sheet == "Task Detail":
@@ -2678,6 +2880,7 @@ def api_save():
             db.update_project_task_detail_field(int(row_idx), db_column, value, conn=request_conn())
             return {"success": True}
         except Exception as e:
+            log(f"save error: sheet={sheet} column={column} row={row_idx}: {e}", "ERROR")
             # Roll back here rather than leaving it to teardown: a rejected
             # UPDATE (e.g. a percentage out of range) aborts the transaction,
             # and the next statement on this shared connection would fail.
@@ -2692,6 +2895,7 @@ def api_save():
         db.update_ticket_field(int(row_idx), db_column, value, conn=request_conn())
         return {"success": True}
     except Exception as e:
+        log(f"save error: sheet={sheet} column={column} row={row_idx}: {e}", "ERROR")
         return {"success": False, "error": str(e)}
 
 
@@ -2804,6 +3008,46 @@ def api_task_detail_export():
         as_attachment=True,
         download_name=f"{label} TASK DETAIL.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.route("/api/report/development")
+def api_development_report():
+    """Build the Development progress deck (.pptx) on the fly.
+
+    ?client= scopes the deck to that one Development client (the Project
+    tab's per-client button); without it every Development client gets a
+    slide. Slides are rendered to PNGs by report_pptx and packed with
+    python-pptx in memory -- nothing is written to disk, so this works on
+    Vercel too.
+    """
+    ensure_schema()
+    client = (request.args.get("client") or "").strip()
+    try:
+        report = db.fetch_development_report_data(conn=request_conn(), client=client or None)
+    except Exception as e:
+        log(f"Development report data error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    if not report.get("clients"):
+        msg = (f"'{client}' is not a Development client" if client
+               else "No Development clients found")
+        return jsonify({"success": False, "error": msg}), 404
+    try:
+        buf = report_pptx.build_development_deck(report)
+    except Exception as e:
+        log(f"Development report build error: {e}", "ERROR")
+        return jsonify({"success": False, "error": str(e)}), 500
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    if client:
+        label = re.sub(r"[^\w.-]+", "_", client).strip("_") or "client"
+        download = f"{label}_Progress_{stamp}.pptx"
+    else:
+        download = f"LKTN_Enhancement_Progress_{stamp}.pptx"
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=download,
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
     )
 
 
