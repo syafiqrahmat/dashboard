@@ -6,6 +6,16 @@
    which column map to update. The trailing badge cell is not a column --
    applyEndDateBadges() fills it from the row's Progress cell: >= 100% "Completed",
    <= 0% "Not Started", otherwise "In Progress" (blank Progress shows no badge). #}
+{% if milestone_charts and (milestone_charts.progress_chart or milestone_charts.status_chart) %}
+<div class="chart-row">
+  {% if milestone_charts.progress_chart %}
+  <div class="chart-box">{{ milestone_charts.progress_chart|safe }}</div>
+  {% endif %}
+  {% if milestone_charts.status_chart %}
+  <div class="chart-box">{{ milestone_charts.status_chart|safe }}</div>
+  {% endif %}
+</div>
+{% endif %}
 <div class="chart-full">
   <div class="edit-bar" style="margin-bottom:4px">
     <span style="flex:1"></span>

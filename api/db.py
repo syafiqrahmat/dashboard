@@ -10,6 +10,7 @@ import os
 import re
 import warnings
 from contextlib import contextmanager
+from datetime import datetime
 
 import pandas as pd
 import psycopg2
@@ -429,7 +430,17 @@ def get_conn():
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL environment variable is not set")
-    return psycopg2.connect(url, connect_timeout=10)
+    # statement_timeout keeps a stalled query from hanging the request until
+    # the browser gives up on its own -- that surfaces to the user as a bare
+    # "Failed to fetch" with no server-side trace. connect_timeout only
+    # covers establishing the connection, not a query waiting on a lock or a
+    # wedged Neon backend; 30s is well under any browser timeout while still
+    # being generous for the bulk upserts an upload runs.
+    return psycopg2.connect(
+        url,
+        connect_timeout=10,
+        options="-c statement_timeout=30000",
+    )
 
 
 @contextmanager
@@ -879,6 +890,36 @@ def reset_all(conn=None):
             cur.execute("TRUNCATE TABLE projectmilestone RESTART IDENTITY")
 
 
+# DATE columns of every editable table (keep in sync with SCHEMA_SQL above):
+# tickets' four, projects' Plan/Target/Actual + the retired start/due/target
+# trio, clients' start_date/end_date, projectmilestone's start_date/end_date
+# and project_task_detail's target_date -- i.e. every *_date name plus
+# sla_dateline. update_*_field() below runs the browser's value straight into
+# an UPDATE, and a cleared date input arrives as '' -- which Postgres rejects
+# on a DATE column with `invalid input syntax for type date: ""`. The insert
+# path has always been protected by _clean_insert_values(); this is the
+# update-side equivalent, applied only to date columns so clearing a TEXT
+# field keeps writing '' as before.
+DATE_DB_COLUMNS = frozenset({
+    # tickets
+    "ticket_created_date", "ticket_completed_date", "ticket_closed_date",
+    "sla_dateline",
+    # projects (including the retired start/due/target trio)
+    "start_date", "due_date", "target_date", "target_start_date",
+    "actual_start_date", "target_end_date", "actual_end_date",
+    "plan_start_date", "plan_end_date",
+    # clients, projectmilestone, project_task_detail
+    "end_date",
+})
+
+
+def _clean_update_value(db_column, value):
+    """Empty date -> NULL, anything else untouched (see DATE_DB_COLUMNS)."""
+    if value == "" and db_column in DATE_DB_COLUMNS:
+        return None
+    return value
+
+
 def update_ticket_field(row_id, db_column, value, conn=None):
     valid_cols = {c for _, c in TICKET_DB_COLUMNS}
     if db_column not in valid_cols:
@@ -887,7 +928,7 @@ def update_ticket_field(row_id, db_column, value, conn=None):
         with c.cursor() as cur:
             cur.execute(
                 f"UPDATE tickets SET {db_column} = %s, updated_at = now() WHERE id = %s",
-                (value, row_id),
+                (_clean_update_value(db_column, value), row_id),
             )
 
 
@@ -899,7 +940,7 @@ def update_client_field(row_id, db_column, value, conn=None):
         with c.cursor() as cur:
             cur.execute(
                 f"UPDATE clients SET {db_column} = %s, updated_at = now() WHERE id = %s",
-                (value, row_id),
+                (_clean_update_value(db_column, value), row_id),
             )
 
 
@@ -911,7 +952,7 @@ def update_project_field(row_id, db_column, value, conn=None):
         with c.cursor() as cur:
             cur.execute(
                 f"UPDATE projects SET {db_column} = %s, updated_at = now() WHERE id = %s",
-                (value, row_id),
+                (_clean_update_value(db_column, value), row_id),
             )
 
 
@@ -1391,7 +1432,7 @@ def update_project_milestone_field(row_id, db_column, value, conn=None):
         with c.cursor() as cur:
             cur.execute(
                 f"UPDATE projectmilestone SET {db_column} = %s, updated_at = now() WHERE id = %s",
-                (value, row_id),
+                (_clean_update_value(db_column, value), row_id),
             )
 
 
@@ -1530,7 +1571,7 @@ def update_project_task_detail_field(row_id, db_column, value, conn=None):
         with c.cursor() as cur:
             cur.execute(
                 f"UPDATE project_task_detail SET {db_column} = %s, updated_at = now() WHERE id = %s",
-                (value, row_id),
+                (_clean_update_value(db_column, value), row_id),
             )
 
 
@@ -1592,3 +1633,158 @@ def find_client_for_project(projek_name, conn=None):
             )
             row = cur.fetchone()
     return row[0] if row else None
+
+
+def fetch_development_report_data(conn=None, client=None):
+    """Everything the Development progress PPTX report renders, as plain
+    JSON-able structures (no DataFrames cross the endpoint boundary).
+
+    Returns {"generated_at", "summary", "clients"} where each client
+    carries its own profile fields, module-level percentages (grouped from
+    the projects table, which is where Percentage actually lives), the
+    milestone timeline for the Gantt slide, and -- for the one client that
+    uploaded a "<project> TASK DETAIL" sheet -- module bars aggregated the
+    same way the Task Detail tab groups them.
+
+    Pass client= to scope the whole report to that one Development client
+    (the Project tab's per-client button); the summary counts then describe
+    just that client. A non-Development client simply yields no rows.
+
+    Project rows join to a Development client on projek_name when the
+    projects table carries one (MARA has both 'MYOT MARA' and 'MYCLAIM
+    MARA' rows under the same Client) and on Client alone when it doesn't
+    (LKTN/YIK sheets never filled the column in).
+    """
+    clients = fetch_clients_df(conn)
+    dev = clients[clients["Projek Status"].astype(str).str.strip().str.lower() == "development"]
+    if client:
+        sel = str(client).strip().lower()
+        dev = dev[dev["Client"].astype(str).str.strip().str.lower() == sel]
+    summary = {"total": len(dev), "completed": 0, "in_progress": 0, "not_started": 0}
+
+    if dev.empty:
+        return {"generated_at": None, "summary": summary, "clients": []}
+
+    projects = fetch_projects_df(conn)
+    milestones = fetch_project_milestone_df(conn)
+    # fetch_project_task_detail_df drops Client/Projek Name from its output
+    # (the tab scopes rows before rendering them), so the report reads the
+    # two grouping keys straight from the table instead.
+    with db_connection(conn) as c:
+        task_detail = pd.read_sql_query(
+            "SELECT client, projek_name, modul, percentage FROM project_task_detail",
+            c,
+        )
+
+    def _f(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return round(f, 1) if f == f else None
+
+    def _d(v):
+        if v is None or pd.isna(v):
+            return None
+        return pd.to_datetime(v).strftime("%d/%m/%Y")
+
+    out = []
+    for _, row in dev.iterrows():
+        client = str(row.get("Client") or "").strip()
+        projek_name = str(row.get("Projek Name") or "").strip()
+
+        prow = projects[projects["Client"].astype(str).str.strip() == client] if not projects.empty else projects
+        if not prow.empty and "Projek Name" in prow.columns:
+            named = prow[prow["Projek Name"].notna() & (prow["Projek Name"].astype(str).str.strip() != "")]
+            match = named[named["Projek Name"].astype(str).str.strip() == projek_name]
+            prow = match if not match.empty else prow[prow["Projek Name"].isna() | (prow["Projek Name"].astype(str).str.strip() == "")]
+
+        pcts = [_f(v) for v in prow.get("Percentage", pd.Series(dtype=float))]
+        pcts = [v for v in pcts if v is not None]
+        overall = round(sum(pcts) / len(pcts), 1) if pcts else None
+
+        modules = []
+        if not prow.empty:
+            grouped = (
+                prow.assign(_pct=pd.to_numeric(prow.get("Percentage"), errors="coerce"))
+                .dropna(subset=["Title"])
+                .groupby("Title", sort=False)
+                .agg(pct=("_pct", "mean"), rows=("Title", "size"))
+            )
+            for title, r in grouped.iterrows():
+                pct = r["pct"]
+                modules.append({
+                    "name": str(title),
+                    "pct": round(float(pct), 1) if pd.notna(pct) else None,
+                    "rows": int(r["rows"]),
+                })
+
+        ms = milestones
+        if not ms.empty:
+            ms = ms[ms["Client"].astype(str).str.strip() == client]
+            if not ms.empty and "Projectname" in ms.columns:
+                named = ms[ms["Projectname"].notna() & (ms["Projectname"].astype(str).str.strip() != "")]
+                match = named[named["Projectname"].astype(str).str.strip() == projek_name]
+                ms = match if not match.empty else ms
+
+        milestone_rows = []
+        if not ms.empty:
+            for _, m in ms.iterrows():
+                raw = str(m.get("Progress") or "").strip().rstrip("%")
+                milestone_rows.append({
+                    "task_name": str(m.get("Taskname") or ""),
+                    "start_date": _d(m.get("Startdate")),
+                    "end_date": _d(m.get("Enddate")),
+                    "progress": _f(raw),
+                })
+
+        td_modules = []
+        if not task_detail.empty:
+            td = task_detail[task_detail["client"].astype(str).str.strip() == client]
+            if not td.empty and projek_name:
+                match = td[td["projek_name"].astype(str).str.strip() == projek_name]
+                if not match.empty:
+                    td = match
+            if not td.empty:
+                grouped = (
+                    td.assign(_pct=pd.to_numeric(td["percentage"], errors="coerce"))
+                    .dropna(subset=["modul"])
+                    .groupby("modul", sort=False)
+                    .agg(pct=("_pct", "mean"), rows=("modul", "size"))
+                )
+                for modul, r in grouped.iterrows():
+                    pct = r["pct"]
+                    td_modules.append({
+                        "name": str(modul),
+                        "pct": round(float(pct), 1) if pd.notna(pct) else None,
+                        "rows": int(r["rows"]),
+                    })
+
+        status = str(row.get("Progress Status") or "").strip()
+        norm = status.lower().replace(" ", "")
+        if norm == "completed":
+            summary["completed"] += 1
+        elif norm in ("inprogress", "berjalan", "dalamproses"):
+            summary["in_progress"] += 1
+        else:
+            summary["not_started"] += 1
+
+        out.append({
+            "client": client,
+            "projek_id": str(row.get("Projek ID") or ""),
+            "projek_name": projek_name,
+            "progress_status": status,
+            "technology": str(row.get("Technology") or ""),
+            "start_date": _d(row.get("Start Date")),
+            "end_date": _d(row.get("End Date")),
+            "overall_pct": overall,
+            "modules": modules,
+            "milestones": milestone_rows,
+            "task_detail_modules": td_modules,
+        })
+
+    return {
+        "generated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "summary": summary,
+        "clients": out,
+    }
