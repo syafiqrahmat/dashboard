@@ -1642,9 +1642,12 @@ def fetch_development_report_data(conn=None, client=None):
     Returns {"generated_at", "summary", "clients"} where each client
     carries its own profile fields, module-level percentages (grouped from
     the projects table, which is where Percentage actually lives), the
-    milestone timeline for the Gantt slide, and -- for the one client that
-    uploaded a "<project> TASK DETAIL" sheet -- module bars aggregated the
-    same way the Task Detail tab groups them.
+    milestone timeline for the Gantt slide, a `timeline` list -- one entry
+    per Project Details row (Title + Description) carrying that row's own
+    Percentage and its Target Start/End period, which the "Garis Masa
+    Pembangunan" slide draws as one bar each -- and, for the one client
+    that uploaded a "<project> TASK DETAIL" sheet, module bars aggregated
+    the same way the Task Detail tab groups them.
 
     Pass client= to scope the whole report to that one Development client
     (the Project tab's per-client button); the summary counts then describe
@@ -1719,6 +1722,36 @@ def fetch_development_report_data(conn=None, client=None):
                     "rows": int(r["rows"]),
                 })
 
+        # One timeline bar per Project Details row (Title + Description),
+        # spanning that row's Target Start/End dates -- the window the sheet
+        # publishes. Plan dates, then the client's contract period, stand in
+        # when Target is missing/inverted so the row still gets a bar instead
+        # of disappearing from the slide.
+        contract_start = _d(row.get("Start Date"))
+        contract_end = _d(row.get("End Date"))
+        timeline = []
+        if not prow.empty:
+            for _, pr in prow.iterrows():
+                raw_title = pr.get("Title")
+                if pd.isna(raw_title) or not str(raw_title).strip():
+                    continue
+                s_raw = e_raw = None
+                for s_col, e_col in (("Target Start Date", "Target End Date"),
+                                     ("Plan Start Date", "Plan End Date")):
+                    s_try, e_try = pr.get(s_col), pr.get(e_col)
+                    if pd.notna(s_try) and pd.notna(e_try) and e_try >= s_try:
+                        s_raw, e_raw = s_try, e_try
+                        break
+                desc = pr.get("Description")
+                timeline.append({
+                    "title": str(raw_title).strip(),
+                    "description": "" if pd.isna(desc)
+                                   else " ".join(str(desc).split()),
+                    "pct": _f(pr.get("Percentage")),
+                    "start_date": _d(s_raw) or contract_start,
+                    "end_date": _d(e_raw) or contract_end,
+                })
+
         ms = milestones
         if not ms.empty:
             ms = ms[ms["Client"].astype(str).str.strip() == client]
@@ -1775,12 +1808,13 @@ def fetch_development_report_data(conn=None, client=None):
             "projek_name": projek_name,
             "progress_status": status,
             "technology": str(row.get("Technology") or ""),
-            "start_date": _d(row.get("Start Date")),
-            "end_date": _d(row.get("End Date")),
+            "start_date": contract_start,
+            "end_date": contract_end,
             "overall_pct": overall,
             "modules": modules,
             "milestones": milestone_rows,
             "task_detail_modules": td_modules,
+            "timeline": timeline,
         })
 
     return {
