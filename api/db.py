@@ -295,15 +295,16 @@ CREATE TABLE IF NOT EXISTS admin_users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Viewer accounts: self-registered, but each sign-up starts as
--- "pending" and only grants a viewer session once an admin approves
--- it (status -> "approved"). "rejected" means an admin denied the
--- sign-up; the row is kept so the username stays reserved and the
--- admin can see what happened. Separate table from admin_users on
--- purpose: no shared credential space, and the admin auth code path
--- stays untouched. email is required at registration and unique
--- (case-insensitively) so an admin can contact the person behind a
--- pending sign-up, and the same address can double as a login id.
+-- Viewer access: an allowlist of emails managed by an admin from the
+-- dashboard ("Viewer Accounts" modal). A viewer signs in by entering
+-- their registered email -- no password. Each row starts "approved"
+-- when an admin adds it; "rejected" means access was revoked (the row
+-- is kept so the address stays reserved and the admin can see what
+-- happened); "pending" is only reachable for legacy self-registered
+-- rows. Separate table from admin_users on purpose: no shared
+-- credential space, and the admin auth code path stays untouched.
+-- username is just the display name (set equal to the email for new
+-- rows); email is unique case-insensitively (index below).
 CREATE TABLE IF NOT EXISTS viewer_users (
     id SERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
@@ -320,6 +321,11 @@ CREATE TABLE IF NOT EXISTS viewer_users (
 -- the unique index below deliberately skips those, and only
 -- *new* registrations are required to supply a non-empty address.
 ALTER TABLE viewer_users ADD COLUMN IF NOT EXISTS email TEXT;
+
+-- Viewer access no longer uses a password: new rows store NULL here
+-- and login checks the email allowlist instead. Legacy rows keep
+-- their hashes (simply unused). Post-hoc ALTER, same pattern as above.
+ALTER TABLE viewer_users ALTER COLUMN password_hash DROP NOT NULL;
 
 -- Case-insensitive uniqueness (an expression index can't be written as a
 -- table constraint, hence CREATE UNIQUE INDEX). Partial so the pre-email
@@ -552,101 +558,84 @@ def set_admin_password(username, new_password, conn=None):
 
 
 # ---------------------------------------------------------------------------
-# Viewer accounts (self-registered, admin-approved)
+# Viewer access (admin-managed email allowlist)
 # ---------------------------------------------------------------------------
 
-VIEWER_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
 # Deliberately a *shape* check only (something@something.tld) -- the server
 # can't verify the mailbox exists without sending mail, and over-strict
 # regexes reject valid addresses.
 VIEWER_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def create_viewer_user(username, password, email, conn=None):
-    """Register a new viewer account in the "pending" state.
+def add_viewer_email(email, conn=None):
+    """Allowlist a viewer email (admin action). The row is created
+    directly in the "approved" state so the address works immediately.
 
-    Returns "created" on success, "username-taken" / "email-taken" if the
-    unique value is already registered, or "invalid" when username, email
-    or password fail the local format rules (email is required).
+    Returns "created" on success, "email-taken" if the address is already
+    registered (case-insensitively), or "invalid" for a malformed address.
     """
-    username = (username or "").strip()
     email = (email or "").strip().lower()
-    if not VIEWER_USERNAME_RE.match(username):
-        return "invalid"
     if not VIEWER_EMAIL_RE.match(email):
-        return "invalid"
-    if not password or len(str(password)) < 6:
-        return "invalid"
-
-    def conflict_kind():
-        # After a UniqueViolation rollback, ask which value is actually
-        # taken so the caller can name the offending field.
-        with db_connection(conn) as c2:
-            with c2.cursor() as cur2:
-                cur2.execute("SELECT 1 FROM viewer_users WHERE username = %s", (username,))
-                if cur2.fetchone():
-                    return "username-taken"
-                cur2.execute("SELECT 1 FROM viewer_users WHERE lower(email) = %s", (email,))
-                if cur2.fetchone():
-                    return "email-taken"
         return "invalid"
 
     with db_connection(conn) as c:
         with c.cursor() as cur:
-            # Pre-checks so the normal path reports the right field --
-            # ON CONFLICT below only ever fires for the username target.
-            cur.execute("SELECT 1 FROM viewer_users WHERE username = %s", (username,))
-            if cur.fetchone():
-                return "username-taken"
             cur.execute("SELECT 1 FROM viewer_users WHERE lower(email) = %s", (email,))
             if cur.fetchone():
                 return "email-taken"
             try:
+                # username doubles as the display name; set equal to the
+                # email so the UI can show one identity everywhere.
                 cur.execute(
-                    "INSERT INTO viewer_users (username, email, password_hash) "
-                    "VALUES (%s, %s, %s) ON CONFLICT (username) DO NOTHING",
-                    (username, email, generate_password_hash(password)),
+                    "INSERT INTO viewer_users (username, email, password_hash, status, approved_at) "
+                    "VALUES (%s, %s, NULL, 'approved', now())",
+                    (email, email),
                 )
                 created = cur.rowcount > 0
             except psycopg2.errors.UniqueViolation:
-                # Race: another sign-up won the email slot between the
-                # pre-check and the INSERT.
+                # Race: the address was added between the pre-check and
+                # the INSERT (the email unique index caught it).
                 c.rollback()
-                return conflict_kind()
+                return "email-taken"
             if not created:
-                return "username-taken"
+                return "email-taken"
         c.commit()
     return "created"
 
 
-def verify_viewer_credentials(username_or_email, password, conn=None):
-    """Check credentials against viewer_users (username or email).
+def verify_viewer_email(email, conn=None):
+    """Look up an email in the viewer allowlist (case-insensitive).
 
-    Returns (status, username, email) where status is "approved", "pending",
-    "rejected" or "invalid" -- username is the stored account name and email
-    its stored address, so the session can display both even when the person
-    signed in with the other id (both None when nothing matched). Like
-    verify_admin_credentials, the password hash is always checked (against a
-    dummy hash when no account matches) so response timing doesn't leak
-    which ids are registered.
+    Returns (status, username, email) where status is "approved",
+    "pending", "rejected" or "not_found" -- username is the stored
+    display name and email the stored address (both None when nothing
+    matched). No password check: access is granted purely by the email
+    being on the allowlist in an approved state.
     """
-    ident = (username_or_email or "").strip()
+    ident = (email or "").strip()
     with db_connection(conn) as c:
         with c.cursor() as cur:
             cur.execute(
-                "SELECT username, password_hash, status, email FROM viewer_users "
-                "WHERE username = %s OR lower(email) = lower(%s)",
-                (ident, ident),
+                "SELECT username, status, email FROM viewer_users "
+                "WHERE lower(email) = lower(%s)",
+                (ident,),
             )
             row = cur.fetchone()
 
-    dummy_hash = generate_password_hash("not-a-real-password")
-    stored_hash = row[1] if row else dummy_hash
-    ok = check_password_hash(stored_hash, password or "")
-    if not ok or row is None:
-        return "invalid", None, None
-    status = row[2] if row[2] in ("approved", "pending", "rejected") else "pending"
-    return status, row[0], row[3]
+    if row is None:
+        return "not_found", None, None
+    status = row[1] if row[1] in ("approved", "pending", "rejected") else "pending"
+    return status, row[0], row[2]
+
+
+def delete_viewer_user(user_id, conn=None):
+    """Remove a viewer email row entirely. Returns True on delete."""
+    with db_connection(conn) as c:
+        with c.cursor() as cur:
+            cur.execute("DELETE FROM viewer_users WHERE id = %s", (user_id,))
+            deleted = cur.rowcount > 0
+        c.commit()
+    return deleted
 
 
 def list_viewer_users(conn=None):

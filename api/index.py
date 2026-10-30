@@ -2325,9 +2325,9 @@ def render_tab_html(idx, filters, filter_options, df=None):
 @app.route("/")
 def index():
     user_role = session.get("role")
-    # Signed-in identity for the topbar role label ("Viewer · john") and the
-    # role-modal account card. Older sessions (created before login stored
-    # these) simply fall back to showing the role alone.
+    # Signed-in identity for the topbar role label ("Viewer · email") and
+    # the role-modal account card. Older sessions (created before login
+    # stored these) simply fall back to showing the role alone.
     user_name = session.get("username")
     user_email = session.get("email")
     filters = parse_filters(request.args)
@@ -2501,91 +2501,50 @@ def api_login():
 
 @app.route("/api/login-viewer", methods=["POST"])
 def api_login_viewer():
-    """Sign in a registered, admin-approved viewer account.
+    """Grant a viewer session for a registered (admin-approved) email.
 
-    The one-click anonymous viewer login is gone: a viewer session is
-    only granted after this credential check succeeds on an account whose
-    status is "approved". The id field accepts either the username or the
-    registered email; the stored username/email (not what was typed) go
-    into the session so the UI shows the canonical account. Pending /
-    rejected accounts get a specific message so a first-timer knows why
-    they can't get in yet.
+    Viewer access is email-only: the address is looked up in the
+    viewer_users allowlist an admin maintains from the dashboard -- no
+    password. The stored email (not what was typed) goes into the session
+    so the UI shows the canonical identity. Pending / rejected entries
+    get a specific message so the person knows why they can't get in yet.
     """
     ensure_schema()
     data = request.get_json(silent=True) or request.form
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
+    email = (data.get("email") or "").strip()
+
+    if not email or not db.VIEWER_EMAIL_RE.match(email):
+        return jsonify({"success": False, "error": "Enter a valid email address"}), 400
 
     try:
-        result, stored_username, stored_email = db.verify_viewer_credentials(
-            username, password, conn=request_conn()
+        result, stored_username, stored_email = db.verify_viewer_email(
+            email, conn=request_conn()
         )
     except Exception as e:
-        log(f"DB error checking viewer credentials: {e}", "ERROR")
-        return jsonify({"success": False, "error": "Login is temporarily unavailable"}), 503
+        log(f"DB error checking viewer email: {e}", "ERROR")
+        return jsonify({"success": False, "error": "Access is temporarily unavailable"}), 503
 
     if result == "approved":
         session["role"] = "viewer"
-        session["username"] = stored_username
-        if stored_email:
-            session["email"] = stored_email
-        else:
-            session.pop("email", None)
+        # Display identity is the email itself (also for legacy rows that
+        # were registered with a separate username).
+        session["username"] = stored_email or stored_username
+        session["email"] = stored_email
         session.permanent = True
         return jsonify({
             "success": True,
             "role": "viewer",
-            "username": stored_username,
+            "username": session["username"],
             "email": stored_email,
         })
     if result == "pending":
-        return jsonify({"success": False, "error": "Registration pending admin approval"}), 403
+        return jsonify({"success": False, "error": "This email is pending admin approval"}), 403
     if result == "rejected":
-        return jsonify({"success": False, "error": "This registration was declined. Contact an admin."}), 403
-    return jsonify({"success": False, "error": "Incorrect username or password"}), 401
-
-
-@app.route("/api/register-viewer", methods=["POST"])
-def api_register_viewer():
-    """First-time sign-up: creates a "pending" viewer account.
-
-    email is required (and unique -- see db.create_viewer_user) so an admin
-    can contact the person behind a pending sign-up. The account only works
-    for login after an admin approves it (see /api/viewers/<id>/approve),
-    so this endpoint never grants a session.
-    """
-    ensure_schema()
-    data = request.get_json(silent=True) or request.form
-    username = (data.get("username") or "").strip()
-    email = (data.get("email") or "").strip()
-    password = data.get("password") or ""
-    confirm = data.get("confirm") or data.get("confirm_password") or ""
-
-    if password != confirm:
-        return jsonify({"success": False, "error": "Passwords do not match"}), 400
-    if not email:
-        return jsonify({"success": False, "error": "Email is required"}), 400
-
-    try:
-        result = db.create_viewer_user(username, password, email, conn=request_conn())
-    except Exception as e:
-        log(f"DB error creating viewer user: {e}", "ERROR")
-        return jsonify({"success": False, "error": "Registration is temporarily unavailable"}), 503
-
-    if result == "created":
-        return jsonify({
-            "success": True,
-            "message": "Registration submitted. An admin must approve your account before you can sign in.",
-        })
-    if result == "username-taken":
-        return jsonify({"success": False, "error": "That username is already taken"}), 409
-    if result == "email-taken":
-        return jsonify({"success": False, "error": "That email is already registered"}), 409
+        return jsonify({"success": False, "error": "This email was declined. Contact an admin."}), 403
     return jsonify({
         "success": False,
-        "error": "Username must be 3-32 characters (letters, numbers, . _ -), "
-                 "a valid email is required, and the password must be at least 6 characters",
-    }), 400
+        "error": "Email not registered. Contact an admin to get access.",
+    }), 401
 
 
 @app.route("/api/viewers", methods=["GET"])
@@ -2604,6 +2563,31 @@ def api_viewers_list():
         v["created_at"] = created.isoformat() if hasattr(created, "isoformat") else (str(created) if created else None)
         v["approved_at"] = approved.isoformat() if hasattr(approved, "isoformat") else (str(approved) if approved else None)
     return jsonify({"success": True, "viewers": viewers})
+
+
+@app.route("/api/viewers", methods=["POST"])
+def api_viewers_add():
+    """Allowlist a viewer email (admin action). Created as "approved",
+    so the address grants access immediately."""
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    ensure_schema()
+    data = request.get_json(silent=True) or request.form
+    email = (data.get("email") or "").strip()
+    if not email:
+        return jsonify({"success": False, "error": "Email is required"}), 400
+
+    try:
+        result = db.add_viewer_email(email, conn=request_conn())
+    except Exception as e:
+        log(f"DB error adding viewer email: {e}", "ERROR")
+        return jsonify({"success": False, "error": "Could not add viewer email"}), 500
+
+    if result == "created":
+        return jsonify({"success": True, "message": f"{email.lower()} can now access the dashboard."})
+    if result == "email-taken":
+        return jsonify({"success": False, "error": "That email is already registered"}), 409
+    return jsonify({"success": False, "error": "Enter a valid email address"}), 400
 
 
 def _set_viewer_status_api(user_id, status):
@@ -2628,6 +2612,23 @@ def api_viewer_approve(user_id):
 @app.route("/api/viewers/<int:user_id>/reject", methods=["POST"])
 def api_viewer_reject(user_id):
     return _set_viewer_status_api(user_id, "rejected")
+
+
+@app.route("/api/viewers/<int:user_id>", methods=["DELETE"])
+def api_viewer_delete(user_id):
+    """Remove a viewer email row entirely (admin action) -- e.g. a typo'd
+    or revoked address the admin doesn't want lingering in the list."""
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    ensure_schema()
+    try:
+        deleted = db.delete_viewer_user(user_id, conn=request_conn())
+    except Exception as e:
+        log(f"DB error deleting viewer {user_id}: {e}", "ERROR")
+        return jsonify({"success": False, "error": "Could not delete viewer account"}), 500
+    if not deleted:
+        return jsonify({"success": False, "error": "Viewer account not found"}), 404
+    return jsonify({"success": True})
 
 
 @app.route("/api/logout", methods=["POST"])
