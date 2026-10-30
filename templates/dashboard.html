@@ -131,12 +131,12 @@ body::after{
 }
 .control-group{display:flex;flex-direction:column;gap:6px}
 .control-group label{font-size:0.72rem;color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:0.4px}
-.control-group select,.control-group input{
+.control-group select,.control-group input,.viewers-add input{
   padding:8px 12px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
   background:rgba(255,255,255,0.7);color:var(--text);font-size:13px;min-width:150px;
   font-family:'Inter',sans-serif;transition:border-color .15s ease, box-shadow .15s ease;
 }
-.control-group select:focus,.control-group input:focus{
+.control-group select:focus,.control-group input:focus,.viewers-add input:focus{
   outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(44,95,130,0.16);
 }
 .control-group input[type=text]{min-width:190px}
@@ -598,11 +598,37 @@ body.role-admin .viewer-only-note{display:none}
 .role-modal-overlay{
   display:none;position:fixed;inset:0;z-index:10200;
   align-items:center;justify-content:center;
+  /* Column so the signed-in account card stacks above the role cards;
+     with only one child visible (the old layout) this changed nothing. */
+  flex-direction:column;gap:16px;
   background:rgba(15,23,35,0.4);
   backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
 }
 .role-modal-overlay.open{display:flex}
 .role-modal-overlay.open ~ .app-shell{filter:blur(6px);pointer-events:none;user-select:none}
+/* Signed-in account card: who am I (username + email + role) + logout.
+   Shown on the role-modal choice screen, hidden while a login box is open. */
+.role-account{
+  display:none;align-items:center;gap:14px;
+  width:100%;max-width:520px;box-sizing:border-box;
+  padding:16px 20px;border-radius:var(--radius-lg);
+  background:var(--glass-strong);border:1px solid var(--border-strong);
+  box-shadow:0 16px 40px rgba(20,32,50,0.22);
+}
+.role-account.open{display:flex}
+.role-account-avatar{font-size:1.8rem;line-height:1}
+.role-account-info{flex:1;min-width:0;text-align:left}
+.role-account-name{
+  font-family:'Sora',sans-serif;font-weight:700;font-size:0.98rem;
+  color:var(--text);word-break:break-all;
+}
+.role-account-email{font-size:0.78rem;color:var(--text-dim);word-break:break-all}
+.role-account-badge{
+  display:inline-block;margin-top:6px;font-size:0.68rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:0.4px;padding:3px 9px;
+  border-radius:999px;background:rgba(44,95,130,0.18);color:var(--accent);
+}
+.role-account .btn-ghost{white-space:nowrap;flex-shrink:0}
 .role-modal-cards{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;padding:20px;max-width:520px}
 .role-card{
   width:220px;padding:28px 22px;border-radius:var(--radius-lg);
@@ -624,6 +650,34 @@ body.role-admin .viewer-only-note{display:none}
 .role-login-box .control-group input{min-width:0;width:100%}
 .role-login-error{color:var(--danger);font-size:0.8rem;min-height:1em}
 .role-login-actions{display:flex;justify-content:flex-end;gap:10px}
+.role-login-alt{font-size:0.78rem;color:var(--text-dim);text-align:center;margin-top:-4px}
+/* Admin: viewer-email allowlist (Viewers modal) */
+.viewers-add{display:flex;gap:8px;margin-bottom:10px}
+.viewers-add input{flex:1;min-width:0}
+.viewers-list{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;min-width:280px}
+.viewer-row{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 12px;border-radius:var(--radius-md,8px);
+  background:var(--glass);border:1px solid var(--border-strong);
+}
+.viewer-row-name{font-weight:600;color:var(--text);font-size:0.9rem;word-break:break-all}
+.viewer-row-meta{font-size:0.72rem;color:var(--text-dim);margin-top:2px}
+.viewer-badge{font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.viewer-badge.pending{background:rgba(243,156,18,0.15);color:#e67e22}
+.viewer-badge.approved{background:rgba(39,174,96,0.15);color:#27ae60}
+.viewer-badge.rejected{background:rgba(192,57,43,0.15);color:#c0392b}
+.viewer-row-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.viewer-row-actions button{
+  border:none;border-radius:6px;padding:5px 10px;font-size:0.75rem;font-weight:600;cursor:pointer;color:#fff;white-space:nowrap;
+}
+.viewer-row-actions .btn-approve{background:#27ae60}
+.viewer-row-actions .btn-approve:hover{background:#219653}
+.viewer-row-actions .btn-reject{background:#c0392b}
+.viewer-row-actions .btn-reject:hover{background:#a93226}
+.viewer-row-actions button:disabled{opacity:.5;cursor:default}
+.viewers-empty{color:var(--text-dim);font-size:0.85rem;text-align:center;padding:18px 0}
+.viewers-error{color:var(--danger);font-size:0.8rem;min-height:1em}
+.viewers-loading{color:var(--text-dim);font-size:0.85rem;text-align:center;padding:18px 0}
 </style>
 </head>
 <body class="{{ 'role-admin' if user_role == 'admin' else ('role-viewer' if user_role == 'viewer' else '') }}">
@@ -634,16 +688,25 @@ body.role-admin .viewer-only-note{display:none}
 </div>
 
 <div class="role-modal-overlay" id="roleModal">
+  <div class="role-account" id="roleAccount">
+    <div class="role-account-avatar">&#128100;</div>
+    <div class="role-account-info">
+      <div class="role-account-name" id="roleAccountName"></div>
+      <div class="role-account-email" id="roleAccountEmail"></div>
+      <div><span class="role-account-badge" id="roleAccountRole"></span></div>
+    </div>
+    <button type="button" class="btn-ghost" onclick="logoutRole()">&#8630; Logout</button>
+  </div>
   <div class="role-modal-cards" id="roleModalChoice">
     <div class="role-card" onclick="showAdminLogin()">
       <div class="role-card-icon">&#128736;&#65039;</div>
       <div class="role-card-title">Admin</div>
       <div class="role-card-desc">Full access. Upload data, enable editing, and manage the database.</div>
     </div>
-    <div class="role-card" onclick="loginViewer()">
+    <div class="role-card" onclick="showViewerAccess()">
       <div class="role-card-icon">&#128065;&#65039;</div>
-      <div class="role-card-title">Viewer</div>
-      <div class="role-card-desc">Browse and filter the dashboard. No editing or uploads.</div>
+      <div class="role-card-title">Viewer Access</div>
+      <div class="role-card-desc">Browse and filter the dashboard. No editing or uploads. Access with your registered email.</div>
     </div>
   </div>
   <div class="role-login-box" id="roleLoginBox">
@@ -661,6 +724,19 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="btn-ghost" onclick="backToRoleChoice()">Back</button>
       <button type="button" class="btn-filter" onclick="loginAdmin()">Log In</button>
     </div>
+  </div>
+  <div class="role-login-box" id="viewerAccessBox">
+    <div class="role-login-title">Viewer Access</div>
+    <div class="control-group">
+      <label>Email</label>
+      <input type="email" id="viewerEmail" autocomplete="email" placeholder="you@example.com">
+    </div>
+    <div class="role-login-error" id="viewerAccessError"></div>
+    <div class="role-login-actions">
+      <button type="button" class="btn-ghost" onclick="backToRoleChoice()">Back</button>
+      <button type="button" class="btn-filter" onclick="accessViewer()">Access</button>
+    </div>
+    <div class="role-login-alt">Your email must already be registered by an admin.</div>
   </div>
 </div>
 
@@ -750,6 +826,7 @@ body.role-admin .viewer-only-note{display:none}
     <button type="button" class="btn-pill primary admin-only" onclick="openUploadModal()">&#8593; Upload Data</button>
     <button type="button" class="btn-pill admin-only" id="syncMysupportBtn" onclick="doSyncMysupport()">&#8635; Sync from mysupport</button>
     <button type="button" class="btn-pill danger admin-only" onclick="openRestartModal()">&#8635; Reset Database</button>
+    <button type="button" class="btn-pill admin-only" onclick="openViewersModal()">&#128101; Viewers</button>
     <button type="button" class="btn-pill" id="installAppBtn" onclick="installApp()" style="display:none">&#8615; Install App</button>
     <button type="button" class="btn-pill" id="roleSwitchBtn" onclick="openRoleModal()">&#9881;&#65039; <span id="roleSwitchLabel">Role</span></button>
     <button type="button" class="btn-pill" onclick="logoutRole()">&#8630; Logout</button>
@@ -806,6 +883,29 @@ body.role-admin .viewer-only-note{display:none}
       <button type="button" class="btn-ghost" onclick="closeRestartModal()">Cancel</button>
       <button type="button" class="btn-danger-solid" id="restartConfirmBtn" onclick="doRestart()">Delete Everything</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="viewersModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <div class="modal-title">Viewer Accounts</div>
+      <button type="button" class="modal-close" onclick="closeViewersModal()">&times;</button>
+    </div>
+    <div class="modal-sub">
+      Add viewer emails below. A viewer gets access by entering their
+      registered email on the <strong>Viewer Access</strong> screen &mdash; no
+      password. <strong>Revoke</strong> removes access (the entry is kept);
+      <strong>Delete</strong> removes it entirely.
+    </div>
+    <div class="viewers-add">
+      <input type="email" id="viewersEmailInput" placeholder="viewer@example.com" autocomplete="email">
+      <button type="button" class="btn-filter" onclick="addViewerEmail()">Add Email</button>
+    </div>
+    <div class="viewers-list" id="viewersList">
+      <div class="viewers-loading">Loading&hellip;</div>
+    </div>
+    <div class="viewers-error" id="viewersError"></div>
   </div>
 </div>
 
@@ -1023,14 +1123,35 @@ function refreshWithSplash() {
   });
 })();
 
-/* ---------- Role gate (admin login vs viewer, backed by a real signed
-   server session, not a client cookie the browser could just edit) ---------- */
+/* ---------- Role gate (admin login vs viewer access, backed by a real
+   signed server session, not a client cookie the browser could just edit) ---------- */
 var SW_USER_ROLE = {{ user_role|tojson }};
+var SW_USER_NAME = {{ user_name|tojson }};
+var SW_USER_EMAIL = {{ user_email|tojson }};
 var MAX_UPLOAD_MB = {{ max_upload_mb }};
 
 function syncRoleLabel() {
   var label = document.getElementById('roleSwitchLabel');
-  if (label) label.textContent = SW_USER_ROLE === 'admin' ? 'Admin' : (SW_USER_ROLE === 'viewer' ? 'Viewer' : 'Role');
+  if (!label) return;
+  var base = SW_USER_ROLE === 'admin' ? 'Admin' : (SW_USER_ROLE === 'viewer' ? 'Viewer' : 'Role');
+  // Signed-in sessions show the account identity too ("Viewer · email").
+  // Sessions from before login stored a name just show the role.
+  label.textContent = (SW_USER_ROLE && SW_USER_NAME) ? base + ' · ' + SW_USER_NAME : base;
+}
+function syncAccountCard() {
+  var card = document.getElementById('roleAccount');
+  if (!card) return;
+  if (!SW_USER_ROLE) {
+    card.classList.remove('open');
+    return;
+  }
+  document.getElementById('roleAccountName').textContent =
+    SW_USER_NAME || (SW_USER_ROLE === 'admin' ? 'Admin' : 'Viewer');
+  var emailEl = document.getElementById('roleAccountEmail');
+  emailEl.textContent = SW_USER_EMAIL || '';
+  emailEl.style.display = SW_USER_EMAIL ? '' : 'none';
+  document.getElementById('roleAccountRole').textContent = SW_USER_ROLE;
+  card.classList.add('open');
 }
 function openRoleModal() {
   backToRoleChoice();
@@ -1047,18 +1168,36 @@ function maybeShowRoleModal() {
   modal.classList.add('mandatory');
   modal.classList.add('open');
 }
+function hideRoleBoxes() {
+  document.getElementById('roleLoginBox').classList.remove('open');
+  document.getElementById('viewerAccessBox').classList.remove('open');
+}
 function showAdminLogin() {
   document.getElementById('roleModalChoice').style.display = 'none';
+  hideRoleBoxes();
+  document.getElementById('roleAccount').classList.remove('open');
   document.getElementById('roleLoginBox').classList.add('open');
   document.getElementById('roleLoginError').textContent = '';
   document.getElementById('roleUsername').focus();
 }
+function showViewerAccess() {
+  document.getElementById('roleModalChoice').style.display = 'none';
+  hideRoleBoxes();
+  document.getElementById('roleAccount').classList.remove('open');
+  document.getElementById('viewerAccessBox').classList.add('open');
+  document.getElementById('viewerAccessError').textContent = '';
+  document.getElementById('viewerEmail').focus();
+}
 function backToRoleChoice() {
   document.getElementById('roleModalChoice').style.display = 'flex';
-  document.getElementById('roleLoginBox').classList.remove('open');
+  hideRoleBoxes();
+  // Signed in? Bring the account card back above the role cards.
+  syncAccountCard();
   document.getElementById('roleUsername').value = '';
   document.getElementById('rolePassword').value = '';
   document.getElementById('roleLoginError').textContent = '';
+  document.getElementById('viewerEmail').value = '';
+  document.getElementById('viewerAccessError').textContent = '';
 }
 function loginAdmin() {
   var username = document.getElementById('roleUsername').value;
@@ -1083,12 +1222,37 @@ function loginAdmin() {
     errBox.textContent = 'Login failed: ' + e.message;
   });
 }
-function loginViewer() {
-  fetch('/api/login-viewer', { method: 'POST' })
-    .then(function(r) { return r.json(); })
-    .then(function(result) {
-      if (result.success) window.location.reload();
-    });
+function accessViewer() {
+  var email = document.getElementById('viewerEmail').value.trim();
+  var errBox = document.getElementById('viewerAccessError');
+  errBox.textContent = '';
+
+  if (!email) {
+    errBox.textContent = 'Email is required';
+    return;
+  }
+  // Shape check only -- same rule the server applies (something@something.tld).
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    errBox.textContent = 'Enter a valid email address';
+    return;
+  }
+
+  fetch('/api/login-viewer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: email})
+  })
+  .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+  .then(function(result) {
+    if (result.ok && result.data.success) {
+      window.location.reload();
+    } else {
+      errBox.textContent = (result.data && result.data.error) || 'Access denied';
+    }
+  })
+  .catch(function(e) {
+    errBox.textContent = 'Access failed: ' + e.message;
+  });
 }
 function logoutRole() {
   fetch('/api/logout', { method: 'POST' })
@@ -1100,10 +1264,203 @@ document.getElementById('roleUsername').addEventListener('keydown', function(e) 
 document.getElementById('rolePassword').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') loginAdmin();
 });
+document.getElementById('viewerEmail').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') accessViewer();
+});
 document.getElementById('roleModal').addEventListener('click', function(e) {
   if (e.target === this && !this.classList.contains('mandatory')) closeRoleModal();
 });
 syncRoleLabel();
+
+/* ---------- Admin: viewer-email allowlist (Viewers modal) ---------- */
+function openViewersModal() {
+  var modal = document.getElementById('viewersModal');
+  modal.classList.add('open');
+  loadViewers();
+}
+function closeViewersModal() {
+  document.getElementById('viewersModal').classList.remove('open');
+}
+function addViewerEmail() {
+  var input = document.getElementById('viewersEmailInput');
+  var errBox = document.getElementById('viewersError');
+  var email = (input.value || '').trim();
+  errBox.textContent = '';
+
+  if (!email) {
+    errBox.textContent = 'Email is required';
+    return;
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    errBox.textContent = 'Enter a valid email address';
+    return;
+  }
+
+  fetch('/api/viewers', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email: email})
+  })
+  .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+  .then(function(result) {
+    if (result.ok && result.data.success) {
+      input.value = '';
+      loadViewers();
+    } else {
+      errBox.textContent = (result.data && result.data.error) || 'Could not add viewer email';
+    }
+  })
+  .catch(function(e) {
+    errBox.textContent = 'Could not add viewer email: ' + e.message;
+  });
+}
+function deleteViewer(id, btn) {
+  var errBox = document.getElementById('viewersError');
+  errBox.textContent = '';
+  if (!window.confirm('Delete this email from the viewer list?')) return;
+  if (btn) btn.disabled = true;
+
+  fetch('/api/viewers/' + id, { method: 'DELETE' })
+    .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+    .then(function(result) {
+      if (result.ok && result.data.success) {
+        loadViewers();
+      } else {
+        if (btn) btn.disabled = false;
+        errBox.textContent = (result.data && result.data.error) || 'Delete failed';
+      }
+    })
+    .catch(function(e) {
+      if (btn) btn.disabled = false;
+      errBox.textContent = 'Delete failed: ' + e.message;
+    });
+}
+function loadViewers() {
+  var list = document.getElementById('viewersList');
+  var errBox = document.getElementById('viewersError');
+  list.innerHTML = '<div class="viewers-loading">Loading&hellip;</div>';
+  errBox.textContent = '';
+
+  fetch('/api/viewers')
+    .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+    .then(function(result) {
+      if (!result.ok || !result.data.success) {
+        list.innerHTML = '';
+        errBox.textContent = (result.data && result.data.error) || 'Could not load viewer accounts';
+        return;
+      }
+      renderViewers(result.data.viewers || []);
+    })
+    .catch(function(e) {
+      list.innerHTML = '';
+      errBox.textContent = 'Could not load viewer accounts: ' + e.message;
+    });
+}
+function renderViewers(viewers) {
+  var list = document.getElementById('viewersList');
+  list.innerHTML = '';
+  if (!viewers.length) {
+    var empty = document.createElement('div');
+    empty.className = 'viewers-empty';
+    empty.textContent = 'No viewer emails yet. Add one above to grant access.';
+    list.appendChild(empty);
+    return;
+  }
+  viewers.forEach(function(v) {
+    var row = document.createElement('div');
+    row.className = 'viewer-row';
+
+    var info = document.createElement('div');
+    var name = document.createElement('div');
+    name.className = 'viewer-row-name';
+    name.textContent = v.email || v.username;
+    var meta = document.createElement('div');
+    meta.className = 'viewer-row-meta';
+    var metaParts = [];
+    metaParts.push('Added ' + formatViewerTime(v.created_at));
+    if (v.status === 'approved' && v.approved_at) metaParts.push('Approved ' + formatViewerTime(v.approved_at));
+    meta.textContent = metaParts.join(' · ');
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    var right = document.createElement('div');
+    right.className = 'viewer-row-actions';
+    var badge = document.createElement('span');
+    badge.className = 'viewer-badge ' + (v.status || 'pending');
+    badge.textContent = v.status || 'pending';
+    right.appendChild(badge);
+
+    if (v.status === 'pending') {
+      var approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
+      approveBtn.className = 'btn-approve';
+      approveBtn.textContent = 'Approve';
+      approveBtn.onclick = function() { setViewerStatus(v.id, 'approve', approveBtn); };
+      var rejectBtn = document.createElement('button');
+      rejectBtn.type = 'button';
+      rejectBtn.className = 'btn-reject';
+      rejectBtn.textContent = 'Reject';
+      rejectBtn.onclick = function() { setViewerStatus(v.id, 'reject', rejectBtn); };
+      right.appendChild(approveBtn);
+      right.appendChild(rejectBtn);
+    } else if (v.status === 'approved') {
+      var revokeBtn = document.createElement('button');
+      revokeBtn.type = 'button';
+      revokeBtn.className = 'btn-reject';
+      revokeBtn.textContent = 'Revoke';
+      revokeBtn.onclick = function() { setViewerStatus(v.id, 'reject', revokeBtn); };
+      right.appendChild(revokeBtn);
+    } else {
+      // rejected: allow restoring access, or removing the entry entirely.
+      var restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'btn-approve';
+      restoreBtn.textContent = 'Restore';
+      restoreBtn.onclick = function() { setViewerStatus(v.id, 'approve', restoreBtn); };
+      right.appendChild(restoreBtn);
+    }
+
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'btn-reject';
+    delBtn.textContent = 'Delete';
+    delBtn.onclick = function() { deleteViewer(v.id, delBtn); };
+    right.appendChild(delBtn);
+
+    row.appendChild(info);
+    row.appendChild(right);
+    list.appendChild(row);
+  });
+}
+function formatViewerTime(iso) {
+  if (!iso) return '';
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+function setViewerStatus(id, action, btn) {
+  var errBox = document.getElementById('viewersError');
+  errBox.textContent = '';
+  if (btn) btn.disabled = true;
+
+  fetch('/api/viewers/' + id + '/' + action, { method: 'POST' })
+    .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+    .then(function(result) {
+      if (result.ok && result.data.success) {
+        loadViewers();
+      } else {
+        if (btn) btn.disabled = false;
+        errBox.textContent = (result.data && result.data.error) || 'Update failed';
+      }
+    })
+    .catch(function(e) {
+      if (btn) btn.disabled = false;
+      errBox.textContent = 'Update failed: ' + e.message;
+    });
+}
+document.getElementById('viewersModal').addEventListener('click', function(e) {
+  if (e.target === this) closeViewersModal();
+});
 
 /* ---------- Client sidebar ---------- */
 function toggleSidebar() {
