@@ -2637,6 +2637,41 @@ def api_logout():
     return jsonify({"success": True})
 
 
+@app.route("/api/change-password", methods=["POST"])
+def api_change_password():
+    """Let a signed-in admin set a new password for their own account.
+
+    Auth is the existing session alone (no current-password field): the
+    username is taken from session["username"] -- written at login -- and
+    never from the request body, so a caller can only change the password
+    of the account they are logged in as.
+    """
+    if not require_admin():
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    ensure_schema()
+    username = session.get("username")
+    if not username:
+        return jsonify({"success": False, "error": "Admin login required"}), 403
+    data = request.get_json(silent=True) or request.form
+    new_password = data.get("new_password") or ""
+    confirm_password = data.get("confirm_password") or ""
+
+    if len(new_password) < 8:
+        return jsonify({"success": False, "error": "Password must be at least 8 characters"}), 400
+    if new_password != confirm_password:
+        return jsonify({"success": False, "error": "Passwords do not match"}), 400
+
+    try:
+        updated = db.set_admin_password(username, new_password, conn=request_conn())
+    except Exception as e:
+        log(f"DB error changing admin password for {username}: {e}", "ERROR")
+        return jsonify({"success": False, "error": "Could not change password"}), 500
+    if not updated:
+        return jsonify({"success": False, "error": "Admin account not found"}), 404
+    log(f"Admin password changed for {username}", "INFO")
+    return jsonify({"success": True, "message": "Password updated"})
+
+
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
     if not require_admin():
